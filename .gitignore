@@ -1,0 +1,10 @@
+node_modules/
+.next/
+out/
+dist/
+data/*.sqlite
+data/*.sqlite-*
+data/threads-session.json
+data/threads-browser-profile/
+.env
+*.log
