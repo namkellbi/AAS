@@ -16,6 +16,10 @@ export const demoPosts: ThreadsPost[] = [
     keyword: 'glasses',
     fetchedAt: new Date().toISOString(),
     trendingScore: 91,
+    affiliateFitScore: 92,
+    opportunityScore: 92,
+    velocityScore: 24,
+    engagementGrowthPercent: 38,
     emotionalCategory: 'insecurity'
   },
   {
@@ -33,6 +37,10 @@ export const demoPosts: ThreadsPost[] = [
     keyword: 'office problems',
     fetchedAt: new Date().toISOString(),
     trendingScore: 84,
+    affiliateFitScore: 79,
+    opportunityScore: 80,
+    velocityScore: 18,
+    engagementGrowthPercent: 22,
     emotionalCategory: 'frustration'
   },
   {
@@ -50,6 +58,10 @@ export const demoPosts: ThreadsPost[] = [
     keyword: 'skincare',
     fetchedAt: new Date().toISOString(),
     trendingScore: 78,
+    affiliateFitScore: 62,
+    opportunityScore: 66,
+    velocityScore: 10,
+    engagementGrowthPercent: 12,
     emotionalCategory: 'anxiety'
   }
 ];
@@ -57,6 +69,8 @@ export const demoPosts: ThreadsPost[] = [
 export const demoAnalysis: Record<string, AIAnalysis> = {
   'demo-low-bridge-glasses': {
     postId: 'demo-low-bridge-glasses',
+    verdict: 'make_now',
+    confidenceScore: 94,
     emotion: 'insecurity',
     painPoint: 'glasses slipping and making the wearer feel self-conscious',
     buyingIntent: 'high',
@@ -68,10 +82,20 @@ export const demoAnalysis: Record<string, AIAnalysis> = {
     ctas: ['People with low nose bridges need this.', 'Try this before buying another frame.'],
     relatabilityScore: 92,
     controversyScore: 18,
+    affiliateFitScore: 96,
+    personas: ['người đeo kính sống mũi thấp', 'người thường vận động hoặc đổ mồ hôi'],
+    situations: ['kính tụt khi cúi xuống', 'kính trượt khi vận động'],
+    demoAngle: 'Quay cận cảnh kính tụt trước khi gắn móc silicone và giữ chắc sau khi gắn.',
+    contentFormat: 'hook nỗi đau -> tình huống relatable -> demo giải pháp nhỏ -> CTA',
+    solutionScript: 'Ê nhưng có cách xử lý gọn lắm nha! Thử gắn móc silicone chống tụt kính vào đuôi gọng, nhỏ xíu mà đeo đỡ phải đẩy kính liên tục. Ai hay vận động hoặc đổ mồ hôi thì thử xem sao nhé.',
+    productSearchKeywords: ['móc silicone chống tụt kính', 'đệm mũi kính silicone'],
+    scriptOutline: ['0:00-0:03: Kính tự tụt khi cúi xuống', '0:03-0:08: Gắn móc silicone', '0:08-0:13: Demo vận động và CTA'],
     createdAt: new Date().toISOString()
   },
   'demo-office-neck': {
     postId: 'demo-office-neck',
+    verdict: 'make_now',
+    confidenceScore: 82,
     emotion: 'fatigue',
     painPoint: 'desk posture discomfort and dry eyes during long workdays',
     buyingIntent: 'medium',
@@ -83,16 +107,24 @@ export const demoAnalysis: Record<string, AIAnalysis> = {
     ctas: ['Fix the setup before blaming your schedule.', 'Start with the one desk item you use most.'],
     relatabilityScore: 88,
     controversyScore: 12,
+    affiliateFitScore: 82,
+    personas: ['dân văn phòng ngồi máy tính lâu'],
+    situations: ['đau cổ cuối ngày', 'mỏi mắt khi làm việc'],
+    demoAngle: 'So sánh tư thế trước và sau khi nâng laptop.',
+    contentFormat: 'hook nỗi đau -> setup sai -> demo thay đổi -> CTA',
+    solutionScript: 'Khoan mua thêm đồ linh tinh nha, thử kê laptop lên đúng tầm mắt trước đã! Một chiếc giá đỡ laptop gọn nhẹ có thể giúp setup nhìn đỡ mỏi hơn hẳn. Dân ngồi máy tính lâu nên thử xem sao.',
+    productSearchKeywords: ['giá đỡ laptop', 'đệm ghế văn phòng memory foam'],
+    scriptOutline: ['0:00-0:03: Tư thế ngồi gây mỏi cổ', '0:03-0:09: Demo setup trước và sau', '0:09-0:14: CTA xem sản phẩm'],
     createdAt: new Date().toISOString()
   }
 };
 
 export const defaultKeywords: Keyword[] = [
-  { id: 'kw-skincare', phrase: 'skincare', enabled: true, cadenceMinutes: 90 },
-  { id: 'kw-office', phrase: 'office problems', enabled: true, cadenceMinutes: 120 },
-  { id: 'kw-beauty', phrase: 'beauty insecurity', enabled: true, cadenceMinutes: 120 },
-  { id: 'kw-dating', phrase: 'dating', enabled: false, cadenceMinutes: 180 },
-  { id: 'kw-glasses', phrase: 'glasses', enabled: true, cadenceMinutes: 90 },
-  { id: 'kw-sleep', phrase: 'sleep', enabled: false, cadenceMinutes: 180 },
-  { id: 'kw-productivity', phrase: 'productivity', enabled: true, cadenceMinutes: 180 }
+  { id: 'kw-vi-glasses', phrase: 'kính tụt', enabled: true, cadenceMinutes: 90 },
+  { id: 'kw-vi-oily-skin', phrase: 'da dầu', enabled: true, cadenceMinutes: 120 },
+  { id: 'kw-vi-hair-loss', phrase: 'tóc rụng', enabled: true, cadenceMinutes: 120 },
+  { id: 'kw-vi-office-pain', phrase: 'đau lưng văn phòng', enabled: true, cadenceMinutes: 120 },
+  { id: 'kw-vi-sleep', phrase: 'mất ngủ', enabled: true, cadenceMinutes: 180 },
+  { id: 'kw-vi-beauty', phrase: 'tự ti ngoại hình', enabled: false, cadenceMinutes: 180 },
+  { id: 'kw-vi-productivity', phrase: 'mẹo tiện lợi', enabled: false, cadenceMinutes: 180 }
 ];

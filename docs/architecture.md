@@ -14,10 +14,22 @@ React UI -> preload desktopAPI -> Electron IPC -> server services -> SQLite / Pl
 2. Renderer calls `threads:fetch`.
 3. Electron main calls `fetchAndStoreThreads`.
 4. Playwright opens Threads with saved session cookies and extracts visible posts.
-5. Each post is scored by `scorePost`.
+5. Each post receives viral, affiliate-fit, and combined opportunity scores from `scorePost`.
 6. Posts are upserted into SQLite and returned to the UI.
 7. User clicks `Analyze`.
 8. Main process calls OpenAI and stores normalized JSON in `ai_analysis`.
+
+## Opportunity Inbox
+
+The Home screen is a local-first opportunity inbox. A manual scan:
+
+1. fetches each enabled niche sequentially with a conservative delay
+2. stores an engagement snapshot for every fetched post
+3. compares new snapshots with prior snapshots to estimate engagement velocity
+4. ranks posts by combined opportunity score
+5. sends only a small number of top candidates to OpenAI for Vietnamese-market triage
+
+AI triage classifies candidates as `make_now`, `watch`, or `skip`. Optional scheduled scans run only while the desktop app is open.
 
 ## Trending Score
 
@@ -31,6 +43,18 @@ The score is capped at 100 and combines:
 - relatability phrases
 
 The scoring module is isolated so future ranking signals can be added without touching the scraper or UI.
+
+## Affiliate Opportunity Score
+
+The local affiliate-fit score is tuned for Vietnamese and English Threads content. It combines:
+
+- pain-point clarity
+- whether a product can directly solve the problem
+- whether the result is easy to demonstrate in a short video
+- audience clarity
+- buying-intent wording
+
+The opportunity score weights affiliate fit more heavily than raw virality so high-engagement drama does not outrank actionable product opportunities. OpenAI adds Vietnamese personas, situations, demo angles, content formats, and skip reasons after the user requests analysis.
 
 ## Future Modules
 

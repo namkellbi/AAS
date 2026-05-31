@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS threads_posts (
   keyword TEXT,
   fetched_at TEXT NOT NULL,
   trending_score INTEGER NOT NULL DEFAULT 0,
+  affiliate_fit_score INTEGER NOT NULL DEFAULT 0,
+  opportunity_score INTEGER NOT NULL DEFAULT 0,
+  velocity_score INTEGER NOT NULL DEFAULT 0,
+  engagement_growth_percent INTEGER NOT NULL DEFAULT 0,
   emotional_category TEXT NOT NULL DEFAULT 'neutral'
 );
 
@@ -23,6 +27,8 @@ CREATE INDEX IF NOT EXISTS idx_threads_posts_fetched_at ON threads_posts(fetched
 
 CREATE TABLE IF NOT EXISTS ai_analysis (
   post_id TEXT PRIMARY KEY,
+  verdict TEXT NOT NULL DEFAULT 'watch',
+  confidence_score INTEGER NOT NULL DEFAULT 0,
   emotion TEXT NOT NULL,
   pain_point TEXT NOT NULL,
   buying_intent TEXT NOT NULL,
@@ -34,9 +40,30 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
   ctas TEXT NOT NULL,
   relatability_score INTEGER NOT NULL,
   controversy_score INTEGER NOT NULL,
+  affiliate_fit_score INTEGER NOT NULL DEFAULT 0,
+  personas TEXT NOT NULL DEFAULT '[]',
+  situations TEXT NOT NULL DEFAULT '[]',
+  demo_angle TEXT NOT NULL DEFAULT '',
+  content_format TEXT NOT NULL DEFAULT '',
+  solution_script TEXT NOT NULL DEFAULT '',
+  product_search_keywords TEXT NOT NULL DEFAULT '[]',
+  script_outline TEXT NOT NULL DEFAULT '[]',
+  reject_reason TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY(post_id) REFERENCES threads_posts(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS engagement_snapshots (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL,
+  likes INTEGER NOT NULL DEFAULT 0,
+  replies INTEGER NOT NULL DEFAULT 0,
+  reposts INTEGER NOT NULL DEFAULT 0,
+  captured_at TEXT NOT NULL,
+  FOREIGN KEY(post_id) REFERENCES threads_posts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_post_time ON engagement_snapshots(post_id, captured_at DESC);
 
 CREATE TABLE IF NOT EXISTS saved_posts (
   post_id TEXT NOT NULL,

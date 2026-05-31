@@ -8,3 +8,4 @@ data/threads-session.json
 data/threads-browser-profile/
 .env
 *.log
+video/

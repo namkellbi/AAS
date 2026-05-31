@@ -1,6 +1,8 @@
 # Threads Trend Finder
 
-Desktop app for affiliate marketers who research viral Threads posts and turn high-signal ideas into affiliate product angles. It fetches public Threads content with Playwright, stores posts locally in SQLite, scores viral potential, and uses OpenAI for pain-point and product suggestions.
+Desktop app for affiliate marketers who research viral Threads posts and turn high-signal ideas into affiliate product angles. It fetches public Threads content with Playwright, stores posts locally in SQLite, scores viral and affiliate potential, and uses OpenAI for Vietnamese-market pain-point and product suggestions.
+
+The default Home screen is an Opportunity Inbox. Use `Scan New Opportunities` to fetch enabled niches, measure engagement growth against prior snapshots, and ask AI to shortlist a small number of high-signal posts. Optional scheduled scans run only while the local desktop app is open.
 
 This app is research-only. It does not render videos, auto-post to TikTok/Reels, create fake engagement, or run aggressive scraping.
 
@@ -80,8 +82,8 @@ The dev command starts Next.js, watches Electron TypeScript files with `tsup`, w
 ## Core Modules
 
 - `src/server/scraper/threadsScraper.ts`: fetches home, keyword, hashtag, profile, and trending-style search pages.
-- `src/server/scoring/trendingScore.ts`: computes a 0-100 score from engagement velocity, replies, reposts, emotional language, controversy, and relatability.
-- `src/server/ai/affiliateAnalysisService.ts`: returns emotional trigger, pain point, buying intent, affiliate categories, product ideas, hooks, CTAs, and viral rationale.
+- `src/server/scoring/trendingScore.ts`: computes viral, affiliate-fit, and combined opportunity scores with Vietnamese and English pain-point signals.
+- `src/server/ai/affiliateAnalysisService.ts`: returns Vietnamese-market emotional triggers, pain points, personas, situations, product ideas, demo angles, content formats, hooks, CTAs, and skip reasons.
 - `src/server/db/client.ts`: local SQLite persistence for posts, analysis, saved posts, keywords, and fetch logs.
 - `src/electron/main.ts`: IPC boundary between renderer and local Node services.
 

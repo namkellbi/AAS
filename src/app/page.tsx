@@ -1,34 +1,43 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { BarChart3, Bookmark, Download, Filter, Flame, KeyRound, LogIn, Plus, RefreshCcw, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { BarChart3, Bookmark, Check, Download, Filter, KeyRound, LogIn, Pencil, Plus, Radar, RefreshCcw, Search, SlidersHorizontal, Sparkles, Trash2, TrendingUp, X } from 'lucide-react';
 import { AnalysisPanel } from '@/components/analysis/analysis-panel';
+import { formatTikTokBrief, TikTokBriefModal } from '@/components/analysis/tiktok-brief-modal';
 import { FeedCard } from '@/components/feed/feed-card';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { translations, type Language, type TranslationCopy } from '@/lib/i18n';
-import { defaultKeywords } from '@/lib/mock-data';
 import { formatModelPrice, openAIModelOptions, recommendedOpenAIModel } from '@/lib/openai-models';
-import type { AIAnalysis, AppSettings, FetchMode, Keyword, SavedPost, ServiceHealth, ThreadsPost } from '@/lib/types';
+import type { AIAnalysis, AppSettings, FetchMode, Keyword, SavedPost, ServiceHealth, ThreadsPost, VideoDraftProgress } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export default function HomePage() {
-  const [activeView, setActiveView] = useState('trending');
+  const [activeView, setActiveView] = useState('home');
   const [posts, setPosts] = useState<ThreadsPost[]>([]);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [analysis, setAnalysis] = useState<Record<string, AIAnalysis>>({});
-  const [keywords, setKeywords] = useState<Keyword[]>(defaultKeywords);
+  const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState('glasses');
+  const [query, setQuery] = useState('');
   const [fetchMode, setFetchMode] = useState<FetchMode>('keyword');
   const [isFetching, setIsFetching] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [latestScanPosts, setLatestScanPosts] = useState<ThreadsPost[]>([]);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [briefPostId, setBriefPostId] = useState<string | null>(null);
+  const [briefCopied, setBriefCopied] = useState(false);
+  const [isRenderingVideo, setIsRenderingVideo] = useState(false);
+  const [videoRenderProgress, setVideoRenderProgress] = useState<VideoDraftProgress | null>(null);
+  const [renderedVideoPath, setRenderedVideoPath] = useState<string | null>(null);
   const [newKeyword, setNewKeyword] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const scannedOnLaunch = useRef(false);
   const language = settings?.language ?? 'en';
   const copy = translations[language];
 
@@ -38,10 +47,12 @@ export default function HomePage() {
 
   const selectedPost = posts.find((post) => post.id === selectedId) ?? posts[0];
   const selectedAnalysis = selectedPost ? analysis[selectedPost.id] : null;
+  const briefPost = briefPostId ? posts.find((post) => post.id === briefPostId) : undefined;
+  const briefAnalysis = briefPost ? analysis[briefPost.id] : undefined;
   const savedIds = useMemo(() => new Set(savedPosts.map((item) => item.postId)), [savedPosts]);
   const analyzedCount = Object.keys(analysis).length;
   const activeKeywords = keywords.filter((keyword) => keyword.enabled);
-  const topPosts = useMemo(() => [...posts].sort((a, b) => b.trendingScore - a.trendingScore).slice(0, 5), [posts]);
+  const topPosts = useMemo(() => [...posts].sort((a, b) => b.opportunityScore - a.opportunityScore).slice(0, 5), [posts]);
   const shouldShowFeedTools = activeView === 'trending' || activeView === 'saved' || activeView === 'products';
   const shouldShowAnalysisPanel = activeView === 'trending' || activeView === 'saved' || activeView === 'products';
 
@@ -55,7 +66,7 @@ export default function HomePage() {
 
     return filtered
       .filter((post) => (query.trim() ? `${post.content} ${post.keyword ?? ''} ${post.author}`.toLowerCase().includes(query.toLowerCase()) : true))
-      .sort((a, b) => b.trendingScore - a.trendingScore);
+      .sort((a, b) => b.opportunityScore - a.opportunityScore);
   }, [activeView, analysis, posts, query, savedIds]);
 
   const runFetch = useCallback(
@@ -73,13 +84,14 @@ export default function HomePage() {
         const result = await api.fetchThreads({ mode, query: phrase, maxPosts });
         setPosts((current) => mergePosts(result.posts, current));
         if (result.posts[0]) setSelectedId(result.posts[0].id);
+        if (result.warning === 'no_posts_found') showHealth({ ok: false, message: copy.noPostsFound });
       } catch (fetchError) {
         setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
       } finally {
         setIsFetching(false);
       }
     },
-    [fetchMode, query, showHealth]
+    [copy.noPostsFound, fetchMode, query, showHealth]
   );
 
   const handleAnalyze = useCallback(async (post: ThreadsPost) => {
@@ -88,7 +100,7 @@ export default function HomePage() {
       const api = window.desktopAPI;
       if (!api) {
         setError('Desktop API is unavailable. Run this inside Electron.');
-        return;
+        return null;
       }
 
       setError(null);
@@ -98,12 +110,36 @@ export default function HomePage() {
         setAnalysis((current) => ({ ...current, [post.id]: result }));
         setSelectedId(post.id);
       }
+      return result ?? null;
     } catch (analyzeError) {
       setError(analyzeError instanceof Error ? analyzeError.message : String(analyzeError));
+      return null;
     } finally {
       setAnalyzingId(null);
     }
   }, [showHealth]);
+
+  const runOpportunityScan = useCallback(async () => {
+    const api = window.desktopAPI;
+    if (!api || isScanning) return;
+
+    setIsScanning(true);
+    setError(null);
+    showHealth(null);
+    try {
+      const result = await api.scanOpportunities();
+      setPosts((current) => mergePosts(result.posts, current));
+      setLatestScanPosts(result.latestScanPosts);
+      setAnalysis((current) => ({ ...current, ...Object.fromEntries(result.analyses.map((item) => [item.postId, item])) }));
+      if (result.posts[0]) setSelectedId(result.posts[0].id);
+      showHealth({ ok: true, message: `${copy.scanComplete} ${result.keywordsScanned} niche, ${result.fetchedPosts} post, ${result.analyzedPosts} AI brief.` });
+      if (result.errors.length) setError(result.errors.join('\n'));
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : String(scanError));
+    } finally {
+      setIsScanning(false);
+    }
+  }, [copy.scanComplete, isScanning, showHealth]);
 
   useEffect(() => {
     const api = window.desktopAPI;
@@ -114,11 +150,25 @@ export default function HomePage() {
         setPosts(storedPosts);
         setSelectedId(storedPosts[0].id);
       }
-      if (storedKeywords.length) setKeywords(storedKeywords);
+      setKeywords(storedKeywords);
       setSavedPosts(storedSaved);
     });
     api.getSettings().then(setSettings);
   }, []);
+
+  useEffect(() => {
+    const api = window.desktopAPI;
+    if (!api) return;
+    return api.onVideoDraftProgress(setVideoRenderProgress);
+  }, []);
+
+  useEffect(() => {
+    const api = window.desktopAPI;
+    if (!api || !selectedPost || analysis[selectedPost.id]) return;
+    void api.getAnalysis(selectedPost.id).then((stored) => {
+      if (stored) setAnalysis((current) => ({ ...current, [selectedPost.id]: stored }));
+    });
+  }, [analysis, selectedPost]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -136,27 +186,96 @@ export default function HomePage() {
   }, [handleAnalyze, selectedPost]);
 
   useEffect(() => {
-    const api = window.desktopAPI;
-    if (!api) return;
-
-    const timer = window.setInterval(() => {
-      const keyword = keywords.find((item) => item.enabled);
-      if (!keyword || isFetching) return;
-      void runFetch('keyword', keyword.phrase, 20);
-    }, 5 * 60_000);
-
+    if (!settings?.autoScanEnabled) return;
+    const timer = window.setInterval(() => void runOpportunityScan(), settings.autoScanMinutes * 60_000);
     return () => window.clearInterval(timer);
-  }, [isFetching, keywords, runFetch]);
+  }, [runOpportunityScan, settings?.autoScanEnabled, settings?.autoScanMinutes]);
+
+  useEffect(() => {
+    if (!settings?.scanOnLaunch || scannedOnLaunch.current) return;
+    scannedOnLaunch.current = true;
+    void runOpportunityScan();
+  }, [runOpportunityScan, settings?.scanOnLaunch]);
 
   async function handleSave(post: ThreadsPost) {
     const api = window.desktopAPI;
-    if (api) {
-      await api.savePost(post.id, 'Inbox', [post.emotionalCategory, post.keyword ?? post.source].filter(Boolean));
-      setSavedPosts(await api.getSavedPosts());
+    if (!api) {
+      setError('Desktop API is unavailable. Run this inside Electron.');
       return;
     }
 
-    setError('Desktop API is unavailable. Run this inside Electron.');
+    try {
+      setError(null);
+      if (savedIds.has(post.id)) {
+        await api.unsavePost(post.id, 'Inbox');
+        showHealth({ ok: true, message: copy.postRemovedFromSaved });
+      } else {
+        await api.savePost(post.id, 'Inbox', [post.emotionalCategory, post.keyword ?? post.source].filter(Boolean));
+        showHealth({ ok: true, message: copy.postSaved });
+      }
+      setSavedPosts(await api.getSavedPosts());
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    }
+  }
+
+  async function handleCopy(post: ThreadsPost) {
+    try {
+      await navigator.clipboard.writeText(`${post.content}\n\n${copy.sourcePost}: ${post.url}`);
+      setCopiedId(post.id);
+      showHealth({ ok: true, message: copy.contentCopied });
+      window.setTimeout(() => setCopiedId((current) => (current === post.id ? null : current)), 2200);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : String(copyError));
+    }
+  }
+
+  async function handleGenerateTikTokIdea(post: ThreadsPost) {
+    setSelectedId(post.id);
+    setBriefCopied(false);
+    const current = analysis[post.id];
+    const result = current?.scriptOutline.length && current.productSearchKeywords.length ? current : await handleAnalyze(post);
+    if (result) setBriefPostId(post.id);
+  }
+
+  async function handleCopyBrief() {
+    if (!briefPost || !briefAnalysis) return;
+    try {
+      await navigator.clipboard.writeText(formatTikTokBrief(briefPost, briefAnalysis, copy));
+      setBriefCopied(true);
+      showHealth({ ok: true, message: copy.briefCopied });
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : String(copyError));
+    }
+  }
+
+  async function handleRenderVideoDraft() {
+    if (!briefPost || !briefAnalysis) return;
+    const api = window.desktopAPI;
+    if (!api) {
+      setError('Desktop API is unavailable. Run this inside Electron.');
+      return;
+    }
+
+    setIsRenderingVideo(true);
+    setVideoRenderProgress({ percent: 1, message: copy.videoDraftFilePickerHelp });
+    setRenderedVideoPath(null);
+    setError(null);
+    try {
+      const result = await api.renderVideoDraft({ post: briefPost, analysis: briefAnalysis });
+      if (result.filePath) setRenderedVideoPath(result.filePath);
+      showHealth({ ok: result.ok, message: result.ok ? copy.videoDraftReady : result.message });
+    } catch (renderError) {
+      setError(renderError instanceof Error ? renderError.message : String(renderError));
+    } finally {
+      setIsRenderingVideo(false);
+    }
+  }
+
+  async function handleOpenVideoOutputFolder() {
+    if (!renderedVideoPath) return;
+    const result = await window.desktopAPI?.openVideoOutputFolder(renderedVideoPath);
+    if (result && !result.ok) showHealth(result);
   }
 
   async function handleAddKeyword() {
@@ -164,11 +283,20 @@ export default function HomePage() {
     if (!phrase) return;
 
     const api = window.desktopAPI;
-    const keyword = api
-      ? await api.addKeyword(phrase)
-      : { id: `kw-${Date.now()}`, phrase, enabled: true, cadenceMinutes: 120 };
-    setKeywords((current) => [...current, keyword].sort((a, b) => a.phrase.localeCompare(b.phrase)));
-    setNewKeyword('');
+    if (!api) {
+      setError('Desktop API is unavailable. Run this inside Electron.');
+      return;
+    }
+
+    try {
+      setError(null);
+      await api.addKeyword(phrase);
+      setKeywords(await api.getKeywords());
+      setNewKeyword('');
+      showHealth({ ok: true, message: copy.keywordAdded });
+    } catch (keywordError) {
+      setError(keywordError instanceof Error ? keywordError.message : String(keywordError));
+    }
   }
 
   async function toggleKeyword(keyword: Keyword) {
@@ -176,6 +304,31 @@ export default function HomePage() {
     const api = window.desktopAPI;
     if (api) await api.setKeywordEnabled(keyword.id, next);
     setKeywords((current) => current.map((item) => (item.id === keyword.id ? { ...item, enabled: next } : item)));
+  }
+
+  async function updateKeyword(id: string, phrase: string) {
+    const normalized = phrase.trim();
+    if (!normalized) return;
+    const api = window.desktopAPI;
+    if (!api) return;
+    try {
+      await api.updateKeyword(id, normalized);
+      setKeywords(await api.getKeywords());
+    } catch (keywordError) {
+      setError(keywordError instanceof Error ? keywordError.message : String(keywordError));
+    }
+  }
+
+  async function deleteKeyword(id: string) {
+    const api = window.desktopAPI;
+    if (!api) return;
+    try {
+      setError(null);
+      await api.deleteKeyword(id);
+      setKeywords(await api.getKeywords());
+    } catch (keywordError) {
+      setError(keywordError instanceof Error ? keywordError.message : String(keywordError));
+    }
   }
 
   async function exportIdeas() {
@@ -188,7 +341,7 @@ export default function HomePage() {
     if (result && !result.ok) showHealth({ ok: false, message: copy.fetchAgainForLink });
   }
 
-  async function saveSettings(next: { openAiApiKey?: string; openAiModel?: string; language?: Language; allowDemoMode?: boolean }) {
+  async function saveSettings(next: { openAiApiKey?: string; openAiModel?: string; elevenLabsApiKey?: string; elevenLabsVoiceId?: string; language?: Language; allowDemoMode?: boolean; autoScanEnabled?: boolean; autoScanMinutes?: number; scanOnLaunch?: boolean }) {
     const api = window.desktopAPI;
     if (!api) {
       setError('Desktop API is unavailable. Run this inside Electron.');
@@ -271,9 +424,10 @@ export default function HomePage() {
               posts={posts}
               savedCount={savedPosts.length}
               topPosts={topPosts}
-              onAnalyzeTop={() => topPosts[0] && handleAnalyze(topPosts[0])}
-              onFetchTrending={() => runFetch('trending', query, 30)}
-              onManageKeywords={() => changeView('keywords')}
+              analyses={analysis}
+              isScanning={isScanning}
+              latestScanPosts={latestScanPosts}
+              onScan={runOpportunityScan}
               onSelectPost={(id) => {
                 setSelectedId(id);
                 changeView('trending');
@@ -289,6 +443,8 @@ export default function HomePage() {
               onFetchKeyword={(phrase) => runFetch('keyword', phrase, 24)}
               onNewKeyword={setNewKeyword}
               onToggleKeyword={toggleKeyword}
+              onUpdateKeyword={updateKeyword}
+              onDeleteKeyword={deleteKeyword}
             />
           ) : activeView === 'settings' ? (
             <SettingsView settings={settings} copy={copy} onSave={saveSettings} onSaveOpenAI={saveAndVerifyOpenAI} onLoginThreads={loginThreads} onCheckThreads={checkThreadsSession} />
@@ -297,8 +453,12 @@ export default function HomePage() {
               copy={copy}
               posts={visiblePosts}
               selectedPostId={selectedPost?.id}
+              analyzingId={analyzingId}
+              copiedId={copiedId}
+              savedIds={savedIds}
               onAnalyze={handleAnalyze}
-              onCopy={(post) => navigator.clipboard.writeText(post.content)}
+              onCopy={handleCopy}
+              onGenerateTikTokIdea={handleGenerateTikTokIdea}
               onOpenLink={openPostLink}
               onRepliesSort={() => setPosts((current) => [...current].sort((a, b) => b.replies - a.replies))}
               onSave={handleSave}
@@ -308,7 +468,24 @@ export default function HomePage() {
         </section>
       </section>
 
-      {shouldShowAnalysisPanel ? <AnalysisPanel post={selectedPost} analysis={selectedAnalysis} loading={analyzingId === selectedPost?.id} onAnalyze={() => selectedPost && handleAnalyze(selectedPost)} copy={copy} /> : null}
+      {shouldShowAnalysisPanel ? <AnalysisPanel post={selectedPost} analysis={selectedAnalysis} copy={copy} /> : null}
+
+      {briefPost && briefAnalysis ? (
+        <TikTokBriefModal
+          analysis={briefAnalysis}
+          copied={briefCopied}
+          copy={copy}
+          post={briefPost}
+          renderProgress={videoRenderProgress}
+          renderedVideoPath={renderedVideoPath}
+          renderingVideo={isRenderingVideo}
+          onClose={() => setBriefPostId(null)}
+          onCopy={handleCopyBrief}
+          onOpenLink={() => openPostLink(briefPost)}
+          onOpenOutputFolder={handleOpenVideoOutputFolder}
+          onRenderVideo={handleRenderVideoDraft}
+        />
+      ) : null}
     </main>
   );
 }
@@ -354,25 +531,27 @@ function FetchToolbar({
 
 function HomeDashboard({
   activeKeywords,
+  analyses,
   analyzedCount,
   copy,
+  isScanning,
+  latestScanPosts,
   posts,
   savedCount,
   topPosts,
-  onAnalyzeTop,
-  onFetchTrending,
-  onManageKeywords,
+  onScan,
   onSelectPost
 }: {
   activeKeywords: number;
+  analyses: Record<string, AIAnalysis>;
   analyzedCount: number;
   copy: TranslationCopy;
+  isScanning: boolean;
+  latestScanPosts: ThreadsPost[];
   posts: ThreadsPost[];
   savedCount: number;
   topPosts: ThreadsPost[];
-  onAnalyzeTop: () => void;
-  onFetchTrending: () => void;
-  onManageKeywords: () => void;
+  onScan: () => void;
   onSelectPost: (id: string) => void;
 }) {
   return (
@@ -384,21 +563,36 @@ function HomeDashboard({
         <DashboardMetric icon={<KeyRound className="size-4" />} label={copy.activeKeywords} value={activeKeywords} />
       </section>
 
+      {latestScanPosts.length ? (
+        <section className="rounded-lg border border-border bg-panel p-5">
+          <div className="mb-1 text-base font-semibold text-text">{copy.latestScanPosts}</div>
+          <div className="mb-4 text-sm text-muted">{copy.latestScanPostsHelp}</div>
+          <div className="space-y-2">
+            {latestScanPosts.slice(0, 10).map((post) => (
+              <button key={post.id} className="flex w-full items-center justify-between gap-4 rounded-md border border-border bg-panelSoft px-3 py-3 text-left transition hover:border-accent/60" onClick={() => onSelectPost(post.id)}>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-text">{post.author}</span>
+                    {post.keyword ? <span className="rounded-md bg-background px-2 py-1 text-[11px] text-muted">{post.keyword}</span> : null}
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-sm text-muted">{post.content}</div>
+                </div>
+                <div className="shrink-0 rounded-md bg-background px-2 py-1 text-sm font-semibold text-accent">{post.opportunityScore}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <div className="text-base font-semibold text-text">{copy.quickActions}</div>
-            <div className="mt-1 text-sm text-muted">{copy.researchOverview}</div>
+            <div className="text-base font-semibold text-text">{copy.opportunityInbox}</div>
+            <div className="mt-1 text-sm text-muted">{copy.scanOpportunitiesHelp}</div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="primary" icon={<Flame className="size-4" />} onClick={onFetchTrending}>
-              {copy.fetchTrending}
-            </Button>
-            <Button icon={<Sparkles className="size-4" />} disabled={!topPosts.length} onClick={onAnalyzeTop}>
-              {copy.analyzeTopPost}
-            </Button>
-            <Button icon={<KeyRound className="size-4" />} onClick={onManageKeywords}>
-              {copy.manageKeywords}
+            <Button variant="primary" icon={<Radar className={cn('size-4', isScanning && 'animate-spin')} />} disabled={isScanning} onClick={onScan}>
+              {isScanning ? copy.scanningOpportunities : copy.scanOpportunities}
             </Button>
           </div>
         </div>
@@ -411,10 +605,15 @@ function HomeDashboard({
             {topPosts.map((post) => (
               <button key={post.id} className="flex w-full items-center justify-between gap-4 rounded-md border border-border bg-panelSoft px-3 py-3 text-left transition hover:border-accent/60" onClick={() => onSelectPost(post.id)}>
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-text">{post.author}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-text">{post.author}</span>
+                    <OpportunityVerdict analysis={analyses[post.id]} copy={copy} />
+                    {post.engagementGrowthPercent > 0 ? <span className="inline-flex items-center gap-1 text-xs text-emerald-300"><TrendingUp className="size-3.5" />+{post.engagementGrowthPercent}%</span> : null}
+                  </div>
                   <div className="mt-1 line-clamp-2 text-sm text-muted">{post.content}</div>
+                  {analyses[post.id]?.affiliateProducts[0] ? <div className="mt-2 text-xs text-sky-200">{analyses[post.id].affiliateProducts[0]}</div> : null}
                 </div>
-                <div className="shrink-0 rounded-md bg-background px-2 py-1 text-sm font-semibold text-accent">{post.trendingScore}</div>
+                <div className="shrink-0 rounded-md bg-background px-2 py-1 text-sm font-semibold text-accent">{post.opportunityScore}</div>
               </button>
             ))}
           </div>
@@ -438,12 +637,27 @@ function DashboardMetric({ icon, label, value }: { icon: ReactNode; label: strin
   );
 }
 
+function OpportunityVerdict({ analysis, copy }: { analysis?: AIAnalysis; copy: TranslationCopy }) {
+  const verdict = analysis?.verdict ?? 'watch';
+  const label = verdict === 'make_now' ? copy.makeNow : verdict === 'skip' ? copy.skip : copy.watch;
+  return (
+    <span className={cn('rounded-md px-2 py-1 text-[11px] font-semibold uppercase', verdict === 'make_now' ? 'bg-success/15 text-emerald-200' : verdict === 'skip' ? 'bg-danger/15 text-rose-200' : 'bg-warning/15 text-amber-200')}>
+      {label}
+      {analysis ? ` · ${analysis.confidenceScore}` : ''}
+    </span>
+  );
+}
+
 function FeedView({
   copy,
   posts,
   selectedPostId,
+  analyzingId,
+  copiedId,
+  savedIds,
   onAnalyze,
   onCopy,
+  onGenerateTikTokIdea,
   onOpenLink,
   onRepliesSort,
   onSave,
@@ -452,8 +666,12 @@ function FeedView({
   copy: TranslationCopy;
   posts: ThreadsPost[];
   selectedPostId?: string;
+  analyzingId: string | null;
+  copiedId: string | null;
+  savedIds: Set<string>;
   onAnalyze: (post: ThreadsPost) => void;
   onCopy: (post: ThreadsPost) => void;
+  onGenerateTikTokIdea: (post: ThreadsPost) => void;
   onOpenLink: (post: ThreadsPost) => void;
   onRepliesSort: () => void;
   onSave: (post: ThreadsPost) => void;
@@ -479,9 +697,13 @@ function FeedView({
             key={post.id}
             post={post}
             active={post.id === selectedPostId}
+            analyzing={post.id === analyzingId}
+            copied={post.id === copiedId}
+            saved={savedIds.has(post.id)}
             copy={copy}
             onAnalyze={() => onAnalyze(post)}
             onCopy={() => onCopy(post)}
+            onGenerateTikTokIdea={() => onGenerateTikTokIdea(post)}
             onOpenLink={() => onOpenLink(post)}
             onSave={() => onSave(post)}
             onSelect={() => onSelect(post.id)}
@@ -501,7 +723,9 @@ function KeywordsView({
   onExport,
   onFetchKeyword,
   onNewKeyword,
-  onToggleKeyword
+  onToggleKeyword,
+  onUpdateKeyword,
+  onDeleteKeyword
 }: {
   copy: TranslationCopy;
   keywords: Keyword[];
@@ -511,27 +735,65 @@ function KeywordsView({
   onFetchKeyword: (phrase: string) => void;
   onNewKeyword: (value: string) => void;
   onToggleKeyword: (keyword: Keyword) => void;
+  onUpdateKeyword: (id: string, phrase: string) => void;
+  onDeleteKeyword: (id: string) => void;
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingPhrase, setEditingPhrase] = useState('');
+
   return (
     <div className="max-w-4xl space-y-4">
       <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-2 text-base font-semibold text-text">{copy.keywordManager}</div>
         <div className="mb-4 text-sm leading-6 text-muted">{copy.keywordManagerHelp}</div>
         <div className="mb-4 flex max-w-xl gap-2">
-          <Input value={newKeyword} onChange={(event) => onNewKeyword(event.target.value)} placeholder={copy.addNiche} />
+          <Input value={newKeyword} onChange={(event) => onNewKeyword(event.target.value)} onKeyDown={(event) => {
+            if (event.key === 'Enter') onAddKeyword();
+          }} placeholder={copy.addNiche} />
           <Button aria-label="Add keyword" icon={<Plus className="size-4" />} onClick={onAddKeyword} />
         </div>
 
         <div className="space-y-2">
           {keywords.map((keyword) => (
-            <div key={keyword.id} className="grid grid-cols-[minmax(0,1fr)_120px_100px_80px] items-center gap-3 rounded-md border border-border bg-panelSoft px-3 py-3">
-              <button className="truncate text-left text-sm font-medium text-text" onClick={() => onFetchKeyword(keyword.phrase)}>
-                {keyword.phrase}
-              </button>
+            <div key={keyword.id} className="grid grid-cols-[minmax(0,1fr)_100px_86px_72px_72px] items-center gap-3 rounded-md border border-border bg-panelSoft px-3 py-3">
+              {editingId === keyword.id ? (
+                <Input value={editingPhrase} onChange={(event) => setEditingPhrase(event.target.value)} onKeyDown={(event) => {
+                  if (event.key === 'Enter' && editingPhrase.trim()) {
+                    onUpdateKeyword(keyword.id, editingPhrase);
+                    setEditingId(null);
+                  }
+                  if (event.key === 'Escape') setEditingId(null);
+                }} />
+              ) : (
+                <button className="truncate text-left text-sm font-medium text-text" onClick={() => onFetchKeyword(keyword.phrase)}>
+                  {keyword.phrase}
+                </button>
+              )}
               <div className={cn('text-xs font-medium', keyword.enabled ? 'text-emerald-300' : 'text-muted')}>{keyword.enabled ? copy.enabled : copy.disabled}</div>
               <Button className="h-8" onClick={() => onFetchKeyword(keyword.phrase)}>
                 {copy.fetch}
               </Button>
+              <div className="flex gap-1">
+                {editingId === keyword.id ? (
+                  <>
+                    <Button aria-label={copy.saveChanges} title={copy.saveChanges} className="h-8 px-2" icon={<Check className="size-4" />} disabled={!editingPhrase.trim()} onClick={() => {
+                      onUpdateKeyword(keyword.id, editingPhrase);
+                      setEditingId(null);
+                    }} />
+                    <Button aria-label={copy.cancel} title={copy.cancel} className="h-8 px-2" icon={<X className="size-4" />} onClick={() => setEditingId(null)} />
+                  </>
+                ) : (
+                  <>
+                    <Button aria-label={copy.editKeyword} title={copy.editKeyword} className="h-8 px-2" icon={<Pencil className="size-4" />} onClick={() => {
+                      setEditingId(keyword.id);
+                      setEditingPhrase(keyword.phrase);
+                    }} />
+                    <Button aria-label={copy.deleteKeyword} title={copy.deleteKeyword} className="h-8 px-2" icon={<Trash2 className="size-4" />} onClick={() => {
+                      if (window.confirm(copy.confirmDeleteKeyword)) onDeleteKeyword(keyword.id);
+                    }} />
+                  </>
+                )}
+              </div>
               <button aria-label={`${keyword.enabled ? 'Disable' : 'Enable'} ${keyword.phrase}`} onClick={() => onToggleKeyword(keyword)} className={cn('h-5 w-9 justify-self-end rounded-full p-0.5 transition', keyword.enabled ? 'bg-success' : 'bg-border')}>
                 <span className={cn('block size-4 rounded-full bg-white transition', keyword.enabled ? 'translate-x-4' : 'translate-x-0')} />
               </button>
@@ -612,12 +874,14 @@ function SettingsView({
 }: {
   settings: AppSettings | null;
   copy: TranslationCopy;
-  onSave: (settings: { openAiApiKey?: string; openAiModel?: string; language?: Language; allowDemoMode?: boolean }) => Promise<AppSettings | null>;
+  onSave: (settings: { openAiApiKey?: string; openAiModel?: string; elevenLabsApiKey?: string; elevenLabsVoiceId?: string; language?: Language; allowDemoMode?: boolean; autoScanEnabled?: boolean; autoScanMinutes?: number; scanOnLaunch?: boolean }) => Promise<AppSettings | null>;
   onSaveOpenAI: (settings: { openAiApiKey?: string; openAiModel?: string }) => Promise<void>;
   onLoginThreads: () => void;
   onCheckThreads: () => void;
 }) {
   const [apiKey, setApiKey] = useState('');
+  const [elevenLabsApiKey, setElevenLabsApiKey] = useState('');
+  const [voiceId, setVoiceId] = useState(settings?.elevenLabsVoiceId ?? 'pNInz6obpgDQGcFmaJgB');
   const [model, setModel] = useState(settings?.openAiModel ?? recommendedOpenAIModel);
   const [saving, setSaving] = useState(false);
   const selectedModel = openAIModelOptions.find((option) => option.id === model) ?? openAIModelOptions[0];
@@ -625,6 +889,10 @@ function SettingsView({
   useEffect(() => {
     if (settings?.openAiModel) setModel(settings.openAiModel);
   }, [settings?.openAiModel]);
+
+  useEffect(() => {
+    if (settings?.elevenLabsVoiceId) setVoiceId(settings.elevenLabsVoiceId);
+  }, [settings?.elevenLabsVoiceId]);
 
   return (
     <div className="max-w-3xl space-y-4">
@@ -678,6 +946,39 @@ function SettingsView({
       </div>
 
       <div className="rounded-lg border border-border bg-panel p-5">
+        <div className="mb-1 text-base font-semibold text-text">{copy.elevenLabs}</div>
+        <div className="mb-4 text-sm text-muted">{copy.adamVoice}</div>
+        <div className="grid gap-3">
+          <Input
+            type="password"
+            value={elevenLabsApiKey}
+            onChange={(event) => setElevenLabsApiKey(event.target.value)}
+            placeholder={settings?.elevenLabsApiKeySet ? settings.maskedElevenLabsApiKey ?? copy.apiKeySaved : copy.elevenLabsApiKeyPlaceholder}
+          />
+          <div className="text-xs text-muted">
+            {settings?.elevenLabsApiKeySet ? `${copy.apiKeySaved}: ${settings.maskedElevenLabsApiKey ?? '••••••••'}. ${copy.elevenLabsApiKeyHelpSaved}` : copy.elevenLabsApiKeyHelpEmpty}
+          </div>
+          <label className="grid gap-2 text-xs text-muted">
+            {copy.voiceId}
+            <Input value={voiceId} onChange={(event) => setVoiceId(event.target.value)} />
+          </label>
+          <Button
+            className="w-fit"
+            variant="primary"
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true);
+              await onSave({ elevenLabsApiKey, elevenLabsVoiceId: voiceId });
+              setElevenLabsApiKey('');
+              setSaving(false);
+            }}
+          >
+            {saving ? copy.saving : copy.save}
+          </Button>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-4 text-base font-semibold text-text">{copy.threadsSession}</div>
         <div className="mb-3 text-sm text-muted">
           {settings?.threadsSessionExists ? copy.sessionExists : copy.noSession}
@@ -710,6 +1011,43 @@ function SettingsView({
       </div>
 
       <div className="rounded-lg border border-border bg-panel p-5">
+        <div className="mb-2 text-base font-semibold text-text">{copy.autoScan}</div>
+        <div className="mb-4 text-sm text-muted">{copy.autoScanHelp}</div>
+        <div className="flex items-center justify-between gap-4 border-b border-border pb-4">
+          <span className="text-sm text-text">{copy.autoScan}</span>
+          <button
+            aria-label={copy.autoScan}
+            onClick={() => onSave({ autoScanEnabled: !settings?.autoScanEnabled })}
+            className={cn('h-5 w-9 rounded-full p-0.5 transition', settings?.autoScanEnabled ? 'bg-success' : 'bg-border')}
+          >
+            <span className={cn('block size-4 rounded-full bg-white transition', settings?.autoScanEnabled ? 'translate-x-4' : 'translate-x-0')} />
+          </button>
+        </div>
+        <div className="flex items-center justify-between gap-4 border-b border-border py-4">
+          <span className="text-sm text-text">{copy.autoScanInterval}</span>
+          <select
+            value={settings?.autoScanMinutes ?? 60}
+            onChange={(event) => onSave({ autoScanMinutes: Number(event.target.value) })}
+            className="h-9 rounded-md border border-border bg-[#0f1217] px-3 text-sm text-text outline-none"
+          >
+            <option value={30}>30 min</option>
+            <option value={60}>1 hour</option>
+            <option value={180}>3 hours</option>
+          </select>
+        </div>
+        <div className="flex items-center justify-between gap-4 pt-4">
+          <span className="text-sm text-text">{copy.scanOnLaunch}</span>
+          <button
+            aria-label={copy.scanOnLaunch}
+            onClick={() => onSave({ scanOnLaunch: !settings?.scanOnLaunch })}
+            className={cn('h-5 w-9 rounded-full p-0.5 transition', settings?.scanOnLaunch ? 'bg-success' : 'bg-border')}
+          >
+            <span className={cn('block size-4 rounded-full bg-white transition', settings?.scanOnLaunch ? 'translate-x-4' : 'translate-x-0')} />
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-4 text-base font-semibold text-text">{copy.demoMode}</div>
         <button
           onClick={() => onSave({ allowDemoMode: !settings?.allowDemoMode })}
@@ -724,16 +1062,16 @@ function SettingsView({
 
 function mergePosts(incoming: ThreadsPost[], current: ThreadsPost[]) {
   const map = new Map<string, ThreadsPost>();
-  for (const post of [...incoming, ...current]) {
+  for (const post of [...current, ...incoming]) {
     map.set(post.id, post);
   }
-  return Array.from(map.values()).sort((a, b) => b.trendingScore - a.trendingScore);
+  return Array.from(map.values()).sort((a, b) => b.opportunityScore - a.opportunityScore);
 }
 
 function titleForView(view: string, copy: TranslationCopy) {
   switch (view) {
     case 'home':
-      return copy.home;
+      return copy.opportunityInbox;
     case 'trending':
       return copy.trendingFeed;
     case 'keywords':

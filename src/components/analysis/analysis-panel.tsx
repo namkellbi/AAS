@@ -1,9 +1,8 @@
 'use client';
 
-import { ExternalLink, Lightbulb, ShoppingBag, Sparkles, Target } from 'lucide-react';
+import { AlertTriangle, ExternalLink, Lightbulb, ShoppingBag, Sparkles, Target, Users, Video } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { ScoreRing } from '@/components/ui/score-ring';
 import type { TranslationCopy } from '@/lib/i18n';
 import type { AIAnalysis, ThreadsPost } from '@/lib/types';
@@ -11,14 +10,10 @@ import type { AIAnalysis, ThreadsPost } from '@/lib/types';
 export function AnalysisPanel({
   post,
   analysis,
-  loading,
-  onAnalyze,
   copy
 }: {
   post?: ThreadsPost;
   analysis?: AIAnalysis | null;
-  loading: boolean;
-  onAnalyze: () => void;
   copy: TranslationCopy;
 }) {
   if (!post) {
@@ -36,24 +31,29 @@ export function AnalysisPanel({
           <div className="mb-2 flex items-center gap-2">
             <Badge>{post.emotionalCategory}</Badge>
             <Badge>{analysis?.buyingIntent ?? copy.intentPending}</Badge>
+            {analysis ? <Badge>{analysis.verdict === 'make_now' ? copy.makeNow : analysis.verdict === 'skip' ? copy.skip : copy.watch}</Badge> : null}
           </div>
           <h2 className="text-lg font-semibold text-text">{copy.aiAnalysis}</h2>
         </div>
-        <ScoreRing value={post.trendingScore} />
+        <ScoreRing value={post.opportunityScore} label={copy.opportunityScore} />
       </div>
-
-      <Button className="mb-5 w-full" variant="primary" icon={<Sparkles className="size-4" />} disabled={loading} onClick={onAnalyze}>
-        {loading ? copy.analyzing : copy.analyzePost}
-      </Button>
 
       <section className="space-y-4">
         <PanelBlock icon={<Target className="size-4" />} title={copy.whyViral}>
           {analysis?.whyViral ?? copy.analysisPending}
         </PanelBlock>
 
+        <div className="grid grid-cols-3 gap-3">
+          <Metric label={copy.viralScore} value={post.trendingScore} />
+          <Metric label={copy.affiliateFit} value={analysis?.affiliateFitScore ?? post.affiliateFitScore} />
+          <Metric label={copy.opportunityScore} value={post.opportunityScore} />
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <Metric label={copy.relatability} value={analysis?.relatabilityScore ?? estimateRelatability(post.trendingScore)} />
           <Metric label={copy.controversy} value={analysis?.controversyScore ?? 0} />
+          <Metric label={copy.growth} value={post.engagementGrowthPercent} />
+          <Metric label={copy.confidence} value={analysis?.confidenceScore ?? 0} />
         </div>
 
         <PanelBlock icon={<Sparkles className="size-4" />} title={copy.emotionalTrigger}>
@@ -71,6 +71,31 @@ export function AnalysisPanel({
             ))}
           </div>
         </PanelBlock>
+
+        {analysis?.personas.length ? (
+          <PanelBlock icon={<Users className="size-4" />} title={copy.personas}>
+            <PillList items={analysis.personas} empty={copy.noAffiliateFit} />
+          </PanelBlock>
+        ) : null}
+
+        {analysis?.situations.length ? (
+          <PanelBlock icon={<Target className="size-4" />} title={copy.situations}>
+            <PillList items={analysis.situations} empty={copy.noAffiliateFit} />
+          </PanelBlock>
+        ) : null}
+
+        {analysis?.demoAngle || analysis?.contentFormat ? (
+          <PanelBlock icon={<Video className="size-4" />} title={copy.demoAngle}>
+            <div>{analysis.demoAngle}</div>
+            {analysis.contentFormat ? <div className="mt-3 border-t border-border pt-3 text-muted"><span className="text-text">{copy.contentFormat}:</span> {analysis.contentFormat}</div> : null}
+          </PanelBlock>
+        ) : null}
+
+        {analysis?.rejectReason ? (
+          <PanelBlock icon={<AlertTriangle className="size-4" />} title={copy.rejectReason}>
+            {analysis.rejectReason}
+          </PanelBlock>
+        ) : null}
 
         <PanelBlock icon={<Lightbulb className="size-4" />} title={copy.hooks}>
           <PillList items={analysis?.hooks ?? []} empty={copy.noHooks} />
@@ -100,7 +125,7 @@ function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-border bg-panel p-4">
       <div className="text-xs text-muted">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-text">{value}</div>
+      <div className="mt-1 text-xl font-semibold text-text">{value}</div>
     </div>
   );
 }

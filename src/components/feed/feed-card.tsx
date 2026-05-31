@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { Bookmark, Clipboard, ExternalLink, Lightbulb, MessageCircle, Repeat2, Sparkles, ThumbsUp } from 'lucide-react';
+import { Bookmark, Clipboard, ExternalLink, Lightbulb, MessageCircle, Repeat2, Sparkles, ThumbsUp, TrendingUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScoreRing } from '@/components/ui/score-ring';
@@ -13,19 +13,27 @@ import { cn, compactNumber } from '@/lib/utils';
 export function FeedCard({
   post,
   active,
+  analyzing,
+  copied,
+  saved,
   onSelect,
   onAnalyze,
   onSave,
   onCopy,
+  onGenerateTikTokIdea,
   onOpenLink,
   copy
 }: {
   post: ThreadsPost;
   active: boolean;
+  analyzing: boolean;
+  copied: boolean;
+  saved: boolean;
   onSelect: () => void;
   onAnalyze: () => void;
   onSave: () => void;
   onCopy: () => void;
+  onGenerateTikTokIdea: () => void;
   onOpenLink: () => void;
   copy: TranslationCopy;
 }) {
@@ -48,9 +56,16 @@ export function FeedCard({
           <div className="mt-1 flex flex-wrap gap-2">
             <Badge>{post.emotionalCategory}</Badge>
             {post.keyword ? <Badge>{post.keyword}</Badge> : null}
+            {post.engagementGrowthPercent > 0 ? <Badge className="text-emerald-200"><TrendingUp className="mr-1 size-3" />+{post.engagementGrowthPercent}%</Badge> : null}
           </div>
         </div>
-        <ScoreRing value={post.trendingScore} />
+        <div className="flex shrink-0 items-center gap-3">
+          <div className="text-right text-[11px] leading-5 text-muted">
+            <div>{copy.viralScore} <span className="font-semibold text-text">{post.trendingScore}</span></div>
+            <div>{copy.affiliateFit} <span className="font-semibold text-text">{post.affiliateFitScore}</span></div>
+          </div>
+          <ScoreRing value={post.opportunityScore} label={copy.opportunityScore} />
+        </div>
       </div>
 
       <p className="mb-4 text-sm leading-6 text-slate-200">{post.content}</p>
@@ -82,21 +97,23 @@ export function FeedCard({
         <Button
           variant="primary"
           icon={<Sparkles className="size-4" />}
+          disabled={analyzing}
           onClick={(event) => {
             event.stopPropagation();
             onAnalyze();
           }}
         >
-          {copy.analyze}
+          {analyzing ? copy.analyzing : copy.analyze}
         </Button>
         <Button
-          icon={<Bookmark className="size-4" />}
+          variant={saved ? 'primary' : 'secondary'}
+          icon={<Bookmark className={cn('size-4', saved && 'fill-current')} />}
           onClick={(event) => {
             event.stopPropagation();
             onSave();
           }}
         >
-          {copy.savePost}
+          {saved ? copy.saved : copy.savePost}
         </Button>
         <Button
           icon={<Clipboard className="size-4" />}
@@ -105,13 +122,14 @@ export function FeedCard({
             onCopy();
           }}
         >
-          {copy.copyContent}
+          {copied ? copy.copied : copy.copyContent}
         </Button>
         <Button
           icon={<Lightbulb className="size-4" />}
+          disabled={analyzing}
           onClick={(event) => {
             event.stopPropagation();
-            onAnalyze();
+            onGenerateTikTokIdea();
           }}
         >
           {copy.generateTikTokIdea}

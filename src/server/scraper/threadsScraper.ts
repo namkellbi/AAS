@@ -6,7 +6,7 @@ import { nowIso } from '@/lib/utils';
 import { getConfig } from '@/server/config';
 import { scorePost } from '@/server/scoring/trendingScore';
 
-type RawPost = Omit<ThreadsPost, 'trendingScore' | 'emotionalCategory'>;
+type RawPost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory'>;
 
 export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsPost[]> {
   const config = getConfig();
@@ -19,6 +19,7 @@ export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsP
     const page = await context.newPage();
     await page.goto(urlForRequest(request), { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await acceptNonBlockingDialogs(page);
+    if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login before fetching.');
     await page.waitForTimeout(config.scraperMinDelayMs);
     await page.locator('a[href*="/post/"]').first().waitFor({ state: 'attached', timeout: 5000 }).catch(() => undefined);
     await page.waitForTimeout(1200);
@@ -29,6 +30,11 @@ export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsP
   } finally {
     await context.close();
   }
+}
+
+async function isLoginRequired(page: Page) {
+  if (/\/login(?:\/|$)/i.test(new URL(page.url()).pathname)) return true;
+  return page.locator('input[type="password"]').first().isVisible().catch(() => false);
 }
 
 export async function openThreadsLoginSession(): Promise<void> {
@@ -169,11 +175,15 @@ async function collectPosts(page: Page, request: FetchRequest, maxPosts: number)
     const rawPosts = await extractVisiblePosts(page, request);
 
     for (const raw of rawPosts) {
-      if (!raw.content || collected.has(raw.id)) continue;
+      if (!isUsablePost(raw) || !matchesRequestedKeyword(raw, request) || collected.has(raw.id)) continue;
       const scored = scorePost(raw);
       collected.set(raw.id, {
         ...raw,
         trendingScore: scored.score,
+        affiliateFitScore: scored.affiliateFitScore,
+        opportunityScore: scored.opportunityScore,
+        velocityScore: scored.velocityScore,
+        engagementGrowthPercent: scored.engagementGrowthPercent,
         emotionalCategory: scored.emotionalCategory
       });
       if (collected.size >= maxPosts) break;
@@ -183,7 +193,30 @@ async function collectPosts(page: Page, request: FetchRequest, maxPosts: number)
     await page.waitForTimeout(1200);
   }
 
-  return Array.from(collected.values()).sort((a, b) => b.trendingScore - a.trendingScore);
+  return Array.from(collected.values()).sort((a, b) => b.opportunityScore - a.opportunityScore);
+}
+
+function isUsablePost(post: RawPost) {
+  if (!post.content || post.author === 'Unknown author' || !/\/post\/[A-Za-z0-9_-]+/.test(post.url)) return false;
+  return !/for younew threadsearchsearchmessagesmessagesnotificationsactivityprofileprofileinsightsinsightssavedsaved/i.test(post.content.replace(/\s+/g, ''));
+}
+
+function matchesRequestedKeyword(post: RawPost, request: FetchRequest) {
+  if (request.mode !== 'keyword' || !request.query?.trim()) return true;
+  const tokens = normalizeSearchText(request.query)
+    .split(/\s+/)
+    .filter((token) => token.length >= 3);
+  if (!tokens.length) return true;
+  const searchable = normalizeSearchText(`${post.author} ${post.authorHandle ?? ''} ${post.content}`);
+  return tokens.some((token) => searchable.includes(token));
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd');
 }
 
 async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<RawPost[]> {
