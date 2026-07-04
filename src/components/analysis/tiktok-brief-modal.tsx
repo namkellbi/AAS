@@ -1,39 +1,54 @@
 'use client';
 
-import { Clipboard, ExternalLink, FolderOpen, Lightbulb, ShoppingBag, Target, Video, X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { ArrowDown, ArrowUp, ExternalLink, FolderOpen, Lightbulb, ShoppingBag, Target, Trash2, Video, X } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { TranslationCopy } from '@/lib/i18n';
-import type { AIAnalysis, ThreadsPost } from '@/lib/types';
+import type { AIAnalysis, AssetLibraryItem, ThreadsPost, VideoDraftRequest } from '@/lib/types';
 
 export function TikTokBriefModal({
   analysis,
-  copied,
+  assets,
   copy,
   post,
   renderProgress,
   renderedVideoPath,
   renderingVideo,
   onClose,
-  onCopy,
   onOpenLink,
   onOpenOutputFolder,
   onRenderVideo
 }: {
   analysis: AIAnalysis;
-  copied: boolean;
+  assets: AssetLibraryItem[];
   copy: TranslationCopy;
   post: ThreadsPost;
   renderProgress?: { percent: number; message: string } | null;
   renderedVideoPath?: string | null;
   renderingVideo: boolean;
   onClose: () => void;
-  onCopy: () => void;
   onOpenLink: () => void;
   onOpenOutputFolder: () => void;
-  onRenderVideo: () => void;
+  onRenderVideo: (request: Partial<VideoDraftRequest>) => void;
 }) {
+  const [replies, setReplies] = useState(analysis.bestReplies);
+  const [hookText, setHookText] = useState(analysis.hooks[0] || '');
+  const [postText, setPostText] = useState(analysis.videoScript.postReadVersion || post.content);
+  const [transitionLine, setTransitionLine] = useState(analysis.videoScript.transitionLine);
+  const [solutionText, setSolutionText] = useState(analysis.videoScript.solutionText || analysis.solutionScript);
+  const [ctaText, setCtaText] = useState(analysis.videoScript.ctaText || analysis.ctas[0] || '');
+  const [backgroundPath, setBackgroundPath] = useState(assets.find((asset) => asset.type === 'background')?.filePath ?? '');
+  const [productClipPath, setProductClipPath] = useState('');
+  useEffect(() => {
+    setReplies(analysis.bestReplies);
+    setHookText(analysis.hooks[0] || '');
+    setPostText(analysis.videoScript.postReadVersion || post.content);
+    setTransitionLine(analysis.videoScript.transitionLine);
+    setSolutionText(analysis.videoScript.solutionText || analysis.solutionScript);
+    setCtaText(analysis.videoScript.ctaText || analysis.ctas[0] || '');
+  }, [analysis, post.content]);
+  const renderRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, productClipPath: productClipPath || undefined };
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-5" onMouseDown={onClose}>
       <section
@@ -81,8 +96,17 @@ export function TikTokBriefModal({
             </BriefSection>
           </div>
 
-          <BriefSection icon={<Lightbulb className="size-4" />} title={copy.hooks}>
-            <List items={analysis.hooks} empty={copy.noHooks} />
+          <BriefSection icon={<Lightbulb className="size-4" />} title={copy.contentVariants}>
+            {analysis.hooks.length ? (
+              <div className="grid gap-2 md:grid-cols-3">
+                {analysis.hooks.slice(0, 3).map((hook, index) => (
+                  <button key={hook} className={`rounded-md border p-3 text-left text-sm transition ${hookText === hook ? 'border-accent bg-accent/10 text-text' : 'border-border bg-panelSoft text-slate-300 hover:border-accent/50'}`} onClick={() => setHookText(hook)}>
+                    <span className="mb-2 block text-[11px] font-medium uppercase text-muted">{copy.variant} {index + 1}</span>
+                    {hook}
+                  </button>
+                ))}
+              </div>
+            ) : <div className="text-muted">{copy.noHooks}</div>}
           </BriefSection>
 
           <BriefSection icon={<Video className="size-4" />} title={copy.scriptOutline}>
@@ -95,6 +119,31 @@ export function TikTokBriefModal({
 
           <BriefSection icon={<ExternalLink className="size-4" />} title={copy.ctaSuggestions}>
             <List items={analysis.ctas} empty={copy.noCtas} />
+          </BriefSection>
+
+          <BriefSection icon={<Video className="size-4" />} title="Pre-render Preview">
+            <label className="grid gap-2 text-xs text-muted">{copy.hookOpening}<textarea className="min-h-20 rounded-md border border-border bg-background p-3 text-sm text-text" value={hookText} onChange={(event) => setHookText(event.target.value)} /></label>
+            <label className="grid gap-2 text-xs text-muted">Post read version<textarea className="min-h-24 rounded-md border border-border bg-background p-3 text-sm text-text" value={postText} onChange={(event) => setPostText(event.target.value)} /></label>
+            <div className="mt-4 text-xs text-muted">Replies sẽ đọc ({replies.length})</div>
+            <div className="mt-2 space-y-2">
+              {replies.map((reply, index) => (
+                <div key={`${reply.id ?? reply.content}-${index}`} className="flex min-w-0 gap-2 overflow-hidden rounded-md border border-border bg-panelSoft p-2">
+                  <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-slate-300 [overflow-wrap:anywhere]">{reply.content}</div>
+                  <Button className="h-8 shrink-0 px-2" icon={<ArrowUp className="size-3" />} disabled={index === 0} onClick={() => setReplies(moveItem(replies, index, index - 1))} />
+                  <Button className="h-8 shrink-0 px-2" icon={<ArrowDown className="size-3" />} disabled={index === replies.length - 1} onClick={() => setReplies(moveItem(replies, index, index + 1))} />
+                  <Button className="h-8 shrink-0 px-2" icon={<Trash2 className="size-3" />} onClick={() => setReplies(replies.filter((_, replyIndex) => replyIndex !== index))} />
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label className="grid gap-2 text-xs text-muted">Transition<textarea className="min-h-20 rounded-md border border-border bg-background p-3 text-sm text-text" value={transitionLine} onChange={(event) => setTransitionLine(event.target.value)} /></label>
+              <label className="grid gap-2 text-xs text-muted">CTA<textarea className="min-h-20 rounded-md border border-border bg-background p-3 text-sm text-text" value={ctaText} onChange={(event) => setCtaText(event.target.value)} /></label>
+            </div>
+            <label className="mt-3 grid gap-2 text-xs text-muted">Solution - lời giới thiệu sản phẩm tự nhiên<textarea className="min-h-28 rounded-md border border-border bg-background p-3 text-sm text-text" value={solutionText} onChange={(event) => setSolutionText(event.target.value)} /></label>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label className="grid gap-2 text-xs text-muted">Background clip<select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={backgroundPath} onChange={(event) => setBackgroundPath(event.target.value)}><option value="">Chọn khi render</option>{assets.filter((asset) => asset.type === 'background').map((asset) => <option key={asset.id} value={asset.filePath}>{asset.label}</option>)}</select></label>
+              <label className="grid gap-2 text-xs text-muted">Product clip (optional)<select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={productClipPath} onChange={(event) => setProductClipPath(event.target.value)}><option value="">Không dùng product clip</option>{assets.filter((asset) => asset.type === 'product').map((asset) => <option key={asset.id} value={asset.filePath}>{asset.label}</option>)}</select></label>
+            </div>
           </BriefSection>
         </div>
 
@@ -116,10 +165,7 @@ export function TikTokBriefModal({
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             <Button onClick={onClose}>{copy.close}</Button>
-            <Button icon={<Clipboard className="size-4" />} onClick={onCopy}>
-              {copied ? copy.briefCopied : copy.copyBrief}
-            </Button>
-            <Button variant="primary" icon={<Video className="size-4" />} disabled={renderingVideo} onClick={onRenderVideo}>
+            <Button variant="primary" icon={<Video className="size-4" />} disabled={renderingVideo} onClick={() => onRenderVideo(renderRequest)}>
               {renderingVideo ? copy.renderingVideoDraft : copy.createVideoDraft}
             </Button>
             {renderedVideoPath ? (
@@ -132,24 +178,11 @@ export function TikTokBriefModal({
   );
 }
 
-export function formatTikTokBrief(post: ThreadsPost, analysis: AIAnalysis, copy: TranslationCopy) {
-  return [
-    copy.tiktokBrief,
-    '',
-    `${copy.sourcePost}: ${post.url}`,
-    post.content,
-    '',
-    `${copy.emotionalTrigger}: ${analysis.emotion}`,
-    `${copy.painPoint}: ${analysis.painPoint}`,
-    `${copy.personas}: ${analysis.personas.join('; ')}`,
-    `${copy.affiliateOpportunities}: ${analysis.affiliateProducts.join('; ')}`,
-    `${copy.productSearchKeywords}: ${analysis.productSearchKeywords.join('; ')}`,
-    `${copy.hooks}: ${analysis.hooks.join('; ')}`,
-    `${copy.scriptOutline}:`,
-    ...analysis.scriptOutline.map((item) => `- ${item}`),
-    `${copy.demoAngle}: ${analysis.demoAngle}`,
-    `${copy.ctaSuggestions}: ${analysis.ctas.join('; ')}`
-  ].join('\n');
+function moveItem<T>(items: T[], from: number, to: number) {
+  const next = [...items];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
 }
 
 function BriefSection({ children, icon, title }: { children: ReactNode; icon: ReactNode; title: string }) {

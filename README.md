@@ -2,9 +2,9 @@
 
 Desktop app for affiliate marketers who research viral Threads posts and turn high-signal ideas into affiliate product angles. It fetches public Threads content with Playwright, stores posts locally in SQLite, scores viral and affiliate potential, and uses OpenAI for Vietnamese-market pain-point and product suggestions.
 
-The default Home screen is an Opportunity Inbox. Use `Scan New Opportunities` to fetch enabled niches, measure engagement growth against prior snapshots, and ask AI to shortlist a small number of high-signal posts. Optional scheduled scans run only while the local desktop app is open.
+The default Home screen is an AI Opportunity Inbox. Use `Scan Opportunities` to fetch enabled keywords, measure engagement growth, and reduce raw Threads results to a short `Make Now` / `Watch` action list. The Keywords screen starts from Vietnamese audience presets, mines pain-point searches with AI, scores keyword effectiveness, and can expand from strong posts or winning videos. Results records views, clicks, orders, and commission so later analyses can learn from the channel's winners. Optional scheduled scans run only while the local desktop app is open.
 
-This app is research-only. It does not render videos, auto-post to TikTok/Reels, create fake engagement, or run aggressive scraping.
+This app is research-first. It can render local 9:16 affiliate video drafts for manual review, but it does not auto-post to TikTok/Reels, create fake engagement, or run aggressive scraping.
 
 ## Stack
 
@@ -13,7 +13,8 @@ This app is research-only. It does not render videos, auto-post to TikTok/Reels,
 - TailwindCSS dark dashboard UI
 - SQLite via `better-sqlite3`
 - Playwright Chromium scraper with saved Threads session state
-- OpenAI Chat Completions JSON output
+- OpenAI analysis and text-to-speech
+- FFmpeg-based local video rendering
 
 ## Folder Structure
 
@@ -31,13 +32,14 @@ This app is research-only. It does not render videos, auto-post to TikTok/Reels,
 │   │   ├── layout/               # Desktop shell layout
 │   │   └── ui/                   # Reusable UI primitives
 │   ├── electron/                 # Electron main and preload
-│   ├── lib/                      # Shared types, utilities, demo data
+│   ├── lib/                      # Shared types, utilities, default keyword data
 │   ├── server/
 │   │   ├── ai/                   # OpenAI affiliate suggestion service
 │   │   ├── db/                   # SQLite schema and repository functions
 │   │   ├── scraper/              # Playwright Threads scraper
 │   │   ├── scoring/              # Trending score algorithm
-│   │   └── services/             # Fetch orchestration and exports
+│   │   ├── services/             # Fetch orchestration, assets, and exports
+│   │   └── video/                # OpenAI TTS and FFmpeg video draft renderer
 │   └── styles/
 └── .env.example
 ```
@@ -84,11 +86,14 @@ The dev command starts Next.js, watches Electron TypeScript files with `tsup`, w
 - `src/server/scraper/threadsScraper.ts`: fetches home, keyword, hashtag, profile, and trending-style search pages.
 - `src/server/scoring/trendingScore.ts`: computes viral, affiliate-fit, and combined opportunity scores with Vietnamese and English pain-point signals.
 - `src/server/ai/affiliateAnalysisService.ts`: returns Vietnamese-market emotional triggers, pain points, personas, situations, product ideas, demo angles, content formats, hooks, CTAs, and skip reasons.
-- `src/server/db/client.ts`: local SQLite persistence for posts, analysis, saved posts, keywords, and fetch logs.
+- `src/server/db/client.ts`: local SQLite persistence for posts, analysis, saved posts, keywords, exclusions, and performance results.
+- `src/server/ai/keywordIntelligenceService.ts`: expands broad niches into Vietnamese pain-point queries.
+- `src/server/video/videoDraftService.ts`: creates hook, voiceover, post, reply, product, and CTA scenes for local 9:16 drafts.
 - `src/electron/main.ts`: IPC boundary between renderer and local Node services.
 
 ## Safety Defaults
 
 - Headless scraper uses capped post limits and delay controls from `.env`.
 - Saved login state is local only.
-- No posting, commenting, liking, bot engagement, or video generation is implemented.
+- Video generation remains local and requires manual review and upload.
+- No posting, commenting, liking, or bot engagement is implemented.

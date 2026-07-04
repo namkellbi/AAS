@@ -3,6 +3,7 @@ export type OpenAIModelOption = {
   label: string;
   description: string;
   inputUsdPerMillion: number;
+  cachedInputUsdPerMillion?: number;
   outputUsdPerMillion: number;
   recommendedFor: string;
   badge?: string;
@@ -16,6 +17,7 @@ export const openAIModelOptions: OpenAIModelOption[] = [
     label: 'GPT-4.1 nano',
     description: 'Cheapest option for testing affiliate post analysis.',
     inputUsdPerMillion: 0.1,
+    cachedInputUsdPerMillion: 0.025,
     outputUsdPerMillion: 0.4,
     recommendedFor: 'Initial testing, bulk scoring, low-cost drafts',
     badge: 'Recommended cheapest'
@@ -25,6 +27,7 @@ export const openAIModelOptions: OpenAIModelOption[] = [
     label: 'GPT-4o mini',
     description: 'Low-cost general model with good quality for short JSON analysis.',
     inputUsdPerMillion: 0.15,
+    cachedInputUsdPerMillion: 0.075,
     outputUsdPerMillion: 0.6,
     recommendedFor: 'Balanced low-cost analysis'
   },
@@ -33,6 +36,7 @@ export const openAIModelOptions: OpenAIModelOption[] = [
     label: 'GPT-4.1 mini',
     description: 'Better instruction following for product angles and structured output.',
     inputUsdPerMillion: 0.4,
+    cachedInputUsdPerMillion: 0.1,
     outputUsdPerMillion: 1.6,
     recommendedFor: 'Higher-quality product suggestions'
   },
@@ -41,6 +45,7 @@ export const openAIModelOptions: OpenAIModelOption[] = [
     label: 'GPT-4.1',
     description: 'Higher quality, higher cost. Use for final review, not bulk testing.',
     inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.5,
     outputUsdPerMillion: 8,
     recommendedFor: 'Final strategy analysis'
   },
@@ -49,6 +54,7 @@ export const openAIModelOptions: OpenAIModelOption[] = [
     label: 'GPT-4o',
     description: 'Strong multimodal/general model, more expensive than mini/nano options.',
     inputUsdPerMillion: 2.5,
+    cachedInputUsdPerMillion: 1.25,
     outputUsdPerMillion: 10,
     recommendedFor: 'High-quality analysis when cost matters less'
   }

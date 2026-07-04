@@ -18,7 +18,12 @@ CREATE TABLE IF NOT EXISTS threads_posts (
   opportunity_score INTEGER NOT NULL DEFAULT 0,
   velocity_score INTEGER NOT NULL DEFAULT 0,
   engagement_growth_percent INTEGER NOT NULL DEFAULT 0,
-  emotional_category TEXT NOT NULL DEFAULT 'neutral'
+  emotional_category TEXT NOT NULL DEFAULT 'neutral',
+  top_replies TEXT NOT NULL DEFAULT '[]',
+  trend_state TEXT NOT NULL DEFAULT 'EMERGING',
+  likes_per_hour REAL NOT NULL DEFAULT 0,
+  replies_per_hour REAL NOT NULL DEFAULT 0,
+  video_potential_score INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_threads_posts_score ON threads_posts(trending_score DESC);
@@ -49,6 +54,14 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
   product_search_keywords TEXT NOT NULL DEFAULT '[]',
   script_outline TEXT NOT NULL DEFAULT '[]',
   reject_reason TEXT,
+  comment_classifications TEXT NOT NULL DEFAULT '[]',
+  best_replies TEXT NOT NULL DEFAULT '[]',
+  video_potential_score INTEGER NOT NULL DEFAULT 0,
+  video_potential_breakdown TEXT NOT NULL DEFAULT '{}',
+  tiktok_caption TEXT NOT NULL DEFAULT '',
+  hashtags TEXT NOT NULL DEFAULT '[]',
+  product_keywords TEXT NOT NULL DEFAULT '{}',
+  video_script TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   FOREIGN KEY(post_id) REFERENCES threads_posts(id) ON DELETE CASCADE
 );
@@ -79,7 +92,15 @@ CREATE TABLE IF NOT EXISTS keywords (
   phrase TEXT NOT NULL UNIQUE,
   enabled INTEGER NOT NULL DEFAULT 1,
   cadence_minutes INTEGER NOT NULL DEFAULT 120,
-  last_fetched_at TEXT
+  last_fetched_at TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
+  seed_audience TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS keyword_exclusions (
+  id TEXT PRIMARY KEY,
+  phrase TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS fetch_logs (
@@ -97,5 +118,33 @@ CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS asset_library (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  label TEXT NOT NULL,
+  file_path TEXT NOT NULL UNIQUE,
+  duration_secs REAL NOT NULL DEFAULT 0,
+  times_used INTEGER NOT NULL DEFAULT 0,
+  last_used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS upload_log (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL,
+  tiktok_url TEXT NOT NULL DEFAULT '',
+  product_name TEXT NOT NULL DEFAULT '',
+  hook TEXT NOT NULL DEFAULT '',
+  content_format TEXT NOT NULL DEFAULT '',
+  uploaded_at TEXT NOT NULL,
+  views INTEGER NOT NULL DEFAULT 0,
+  clicks INTEGER NOT NULL DEFAULT 0,
+  orders INTEGER NOT NULL DEFAULT 0,
+  revenue REAL NOT NULL DEFAULT 0,
+  commission REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'published',
+  note TEXT NOT NULL DEFAULT '',
+  FOREIGN KEY(post_id) REFERENCES threads_posts(id) ON DELETE CASCADE
 );
 `;

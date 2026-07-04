@@ -1,7 +1,7 @@
 'use client';
 
-import { AlertTriangle, ExternalLink, Lightbulb, ShoppingBag, Sparkles, Target, Users, Video } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, Lightbulb, MessageCircle, ShoppingBag, Sparkles, Target, TrendingUp, Users, Video } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { ScoreRing } from '@/components/ui/score-ring';
 import type { TranslationCopy } from '@/lib/i18n';
@@ -16,6 +16,7 @@ export function AnalysisPanel({
   analysis?: AIAnalysis | null;
   copy: TranslationCopy;
 }) {
+  const [showTechnicalScores, setShowTechnicalScores] = useState(false);
   if (!post) {
     return (
       <aside className="h-screen w-[390px] shrink-0 border-l border-border bg-[#0c0f13] p-5">
@@ -34,6 +35,10 @@ export function AnalysisPanel({
             {analysis ? <Badge>{analysis.verdict === 'make_now' ? copy.makeNow : analysis.verdict === 'skip' ? copy.skip : copy.watch}</Badge> : null}
           </div>
           <h2 className="text-lg font-semibold text-text">{copy.aiAnalysis}</h2>
+          <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted">
+            <span className="inline-flex items-center gap-1"><MessageCircle className="size-3.5" />{post.replies} replies</span>
+            <span className="inline-flex items-center gap-1"><TrendingUp className="size-3.5" />{trendLabel(post.trendState)}</span>
+          </div>
         </div>
         <ScoreRing value={post.opportunityScore} label={copy.opportunityScore} />
       </div>
@@ -42,19 +47,6 @@ export function AnalysisPanel({
         <PanelBlock icon={<Target className="size-4" />} title={copy.whyViral}>
           {analysis?.whyViral ?? copy.analysisPending}
         </PanelBlock>
-
-        <div className="grid grid-cols-3 gap-3">
-          <Metric label={copy.viralScore} value={post.trendingScore} />
-          <Metric label={copy.affiliateFit} value={analysis?.affiliateFitScore ?? post.affiliateFitScore} />
-          <Metric label={copy.opportunityScore} value={post.opportunityScore} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Metric label={copy.relatability} value={analysis?.relatabilityScore ?? estimateRelatability(post.trendingScore)} />
-          <Metric label={copy.controversy} value={analysis?.controversyScore ?? 0} />
-          <Metric label={copy.growth} value={post.engagementGrowthPercent} />
-          <Metric label={copy.confidence} value={analysis?.confidenceScore ?? 0} />
-        </div>
 
         <PanelBlock icon={<Sparkles className="size-4" />} title={copy.emotionalTrigger}>
           <div className="text-text">{analysis?.emotion ?? post.emotionalCategory}</div>
@@ -104,9 +96,30 @@ export function AnalysisPanel({
         <PanelBlock icon={<ExternalLink className="size-4" />} title={copy.ctaSuggestions}>
           <PillList items={analysis?.ctas ?? []} empty={copy.noCtas} />
         </PanelBlock>
+
+        <button className="flex w-full items-center justify-between rounded-lg border border-border bg-panel px-4 py-3 text-left text-sm font-semibold text-text transition hover:border-accent/50" onClick={() => setShowTechnicalScores((current) => !current)}>
+          <span>Chi tiết điểm số</span>
+          {showTechnicalScores ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+        </button>
+        {showTechnicalScores ? (
+          <div className="grid grid-cols-2 gap-3">
+            <Metric label={copy.viralScore} value={post.trendingScore} />
+            <Metric label={copy.affiliateFit} value={analysis?.affiliateFitScore ?? post.affiliateFitScore} />
+            <Metric label={copy.opportunityScore} value={post.opportunityScore} />
+            <Metric label={copy.relatability} value={analysis?.relatabilityScore ?? estimateRelatability(post.trendingScore)} />
+            <Metric label={copy.controversy} value={analysis?.controversyScore ?? 0} />
+            <Metric label={copy.growth} value={post.engagementGrowthPercent} />
+            <Metric label={copy.confidence} value={analysis?.confidenceScore ?? 0} />
+            <Metric label="Video potential" value={analysis?.videoPotentialScore ?? post.videoPotentialScore} />
+          </div>
+        ) : null}
       </section>
     </aside>
   );
+}
+
+function trendLabel(state: ThreadsPost['trendState']) {
+  return { EMERGING: 'Đang nổi lên', GROWING: 'Đang tăng nhanh', PEAK: 'Đang đạt đỉnh', DECLINING: 'Đang giảm', DEAD: 'Đã nguội' }[state];
 }
 
 function PanelBlock({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {

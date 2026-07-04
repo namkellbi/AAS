@@ -1,6 +1,6 @@
 'use client';
 
-import { Bookmark, Flame, Home, KeyRound, Lightbulb, Settings, Sparkles } from 'lucide-react';
+import { Bookmark, Boxes, Flame, Home, KeyRound, LineChart, Settings, Sparkles } from 'lucide-react';
 import type { TranslationCopy } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -9,7 +9,8 @@ const nav = [
   { id: 'trending', labelKey: 'trendingFeed', icon: Flame },
   { id: 'keywords', labelKey: 'keywords', icon: KeyRound },
   { id: 'saved', labelKey: 'savedPosts', icon: Bookmark },
-  { id: 'products', labelKey: 'productSuggestions', icon: Lightbulb },
+  { id: 'assets', label: 'Kho clip', icon: Boxes },
+  { id: 'uploads', labelKey: 'results', icon: LineChart },
   { id: 'settings', labelKey: 'settings', icon: Settings }
 ] as const;
 
@@ -39,16 +40,11 @@ export function Sidebar({ active, onChange, copy }: { active: string; onChange: 
               )}
             >
               <Icon className="size-4" />
-              <span className="truncate">{copy[item.labelKey]}</span>
+              <span className="truncate">{'label' in item ? item.label : copy[item.labelKey]}</span>
             </button>
           );
         })}
       </nav>
-
-      <div className="mt-auto rounded-md border border-border bg-panel p-3">
-        <div className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-muted">{copy.guardrailsTitle}</div>
-        <div className="text-sm leading-5 text-text">{copy.guardrailsBody}</div>
-      </div>
     </aside>
   );
 }

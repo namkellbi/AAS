@@ -8,10 +8,7 @@ type TranslationKey =
   | 'trendingFeed'
   | 'keywords'
   | 'savedPosts'
-  | 'productSuggestions'
   | 'settings'
-  | 'guardrailsTitle'
-  | 'guardrailsBody'
   | 'searchPlaceholder'
   | 'fetch'
   | 'postsSorted'
@@ -41,14 +38,17 @@ type TranslationKey =
   | 'growth'
   | 'recentSaved'
   | 'feedResearch'
+  | 'manualImportTitle'
+  | 'manualImportHelp'
+  | 'manualImportPlaceholder'
+  | 'manualImport'
+  | 'manualImporting'
+  | 'manualImportComplete'
   | 'analyze'
   | 'savePost'
   | 'saved'
-  | 'copyContent'
-  | 'copied'
   | 'postSaved'
   | 'postRemovedFromSaved'
-  | 'contentCopied'
   | 'generateTikTokIdea'
   | 'openLink'
   | 'fetchAgainForLink'
@@ -79,8 +79,6 @@ type TranslationKey =
   | 'sourcePost'
   | 'productSearchKeywords'
   | 'scriptOutline'
-  | 'copyBrief'
-  | 'briefCopied'
   | 'createVideoDraft'
   | 'renderingVideoDraft'
   | 'videoDraftHelp'
@@ -96,7 +94,7 @@ type TranslationKey =
   | 'keywordManagerHelp'
   | 'enabled'
   | 'disabled'
-  | 'addNiche'
+  | 'addKeywordPlaceholder'
   | 'editKeyword'
   | 'deleteKeyword'
   | 'saveChanges'
@@ -105,12 +103,7 @@ type TranslationKey =
   | 'keywordAdded'
   | 'export'
   | 'openAi'
-  | 'elevenLabs'
-  | 'adamVoice'
-  | 'elevenLabsApiKeyPlaceholder'
-  | 'elevenLabsApiKeyHelpSaved'
-  | 'elevenLabsApiKeyHelpEmpty'
-  | 'voiceId'
+  | 'openAiBillingDashboard'
   | 'apiKeySaved'
   | 'apiKeyPlaceholder'
   | 'apiKeyHelpSaved'
@@ -124,14 +117,97 @@ type TranslationKey =
   | 'noSession'
   | 'loggedInAs'
   | 'accountUnknown'
-  | 'demoMode'
   | 'autoScan'
   | 'autoScanHelp'
   | 'autoScanInterval'
   | 'scanOnLaunch'
   | 'language'
   | 'english'
-  | 'vietnamese';
+  | 'vietnamese'
+  | 'readyToCreate'
+  | 'trackedResults'
+  | 'todayShortlist'
+  | 'todayShortlistHelp'
+  | 'newPosts'
+  | 'seenPosts'
+  | 'whyWorthMaking'
+  | 'productToPromote'
+  | 'suggestedHook'
+  | 'pendingAiShortlist'
+  | 'createContent'
+  | 'inspectPost'
+  | 'noShortlistYet'
+  | 'noShortlistHelp'
+  | 'keywordIntelligence'
+  | 'keywordIntelligenceHelp'
+  | 'keywordSeedPlaceholder'
+  | 'suggestingKeywords'
+  | 'addSuggestion'
+  | 'excludedKeywords'
+  | 'excludedKeywordsHelp'
+  | 'excludedKeywordPlaceholder'
+  | 'results'
+  | 'resultsHelp'
+  | 'totalViews'
+  | 'clickRate'
+  | 'orderConversion'
+  | 'totalCommission'
+  | 'addResult'
+  | 'editResult'
+  | 'resultFormHelp'
+  | 'chooseSourcePost'
+  | 'productName'
+  | 'hookUsed'
+  | 'formatUsed'
+  | 'views'
+  | 'clicks'
+  | 'orders'
+  | 'revenue'
+  | 'commission'
+  | 'published'
+  | 'tracking'
+  | 'winner'
+  | 'stopped'
+  | 'note'
+  | 'learnedSignals'
+  | 'unknownProduct'
+  | 'noHookRecorded'
+  | 'noResultsYet'
+  | 'contentVariants'
+  | 'variant'
+  | 'hookOpening'
+  | 'aiDiscovery'
+  | 'manualKeyword'
+  | 'chooseAudience'
+  | 'chooseAudienceHelp'
+  | 'refineAudiencePlaceholder'
+  | 'discoverPainPoints'
+  | 'discoveringKeywords'
+  | 'expandFromWinners'
+  | 'keywordSuggestions'
+  | 'discoveryEvidence'
+  | 'strongPostsUsed'
+  | 'winnersUsed'
+  | 'addAllSuggestions'
+  | 'noNewKeywordSuggestions'
+  | 'manualKeywordHelp'
+  | 'addKeyword'
+  | 'keywordPortfolio'
+  | 'keywordPortfolioHelp'
+  | 'potential'
+  | 'testing'
+  | 'poor'
+  | 'audienceSource'
+  | 'keywordScore'
+  | 'disableSuggested'
+  | 'scans'
+  | 'postsFound'
+  | 'productFitRate'
+  | 'noKeywordsYet'
+  | 'sourceManual'
+  | 'sourceDefault'
+  | 'sourceAiAudience'
+  | 'sourceAiExpansion';
 
 export type TranslationCopy = Record<TranslationKey, string>;
 
@@ -140,35 +216,32 @@ export const translations: Record<Language, TranslationCopy> = {
     appName: 'Trend Finder',
     appSubtitle: 'Threads affiliate research',
     home: 'Home',
-    opportunityInbox: "Today's Posts",
-    trendingFeed: 'Trending Feed',
+    opportunityInbox: "Today's Opportunities",
+    trendingFeed: 'Explore Posts',
     keywords: 'Keywords',
     savedPosts: 'Saved Posts',
-    productSuggestions: 'Product Suggestions',
     settings: 'Settings',
-    guardrailsTitle: 'Guardrails',
-    guardrailsBody: 'Research only. No auto-posting, fake engagement, or aggressive scraping.',
-    searchPlaceholder: 'Search posts or fetch niche...',
+    searchPlaceholder: 'Search posts or fetch keyword...',
     fetch: 'Fetch',
     postsSorted: 'posts sorted by affiliate opportunity score',
     replies: 'Replies',
     noMatchingPosts: 'No matching posts.',
-    noPostsFound: 'Threads did not return posts for this niche. Try a broader keyword.',
+    noPostsFound: 'Threads did not return posts for this keyword. Try a broader keyword.',
     keywordMonitoring: 'Keyword Monitoring',
-    keywordMonitoringHelp: 'Saved niches for quick fetch and future scheduled monitoring. Click a keyword to fetch it now; toggle controls background monitoring.',
+    keywordMonitoringHelp: 'Saved keywords for quick fetch and future scheduled monitoring. Click a keyword to fetch it now; toggle controls background monitoring.',
     quickActions: 'Quick Actions',
     topOpportunities: 'Featured Posts',
     latestScanPosts: 'Latest Scan',
     latestScanPostsHelp: 'Posts fetched in the most recent scan. Open a post to inspect it in Trending Feed.',
     researchOverview: 'Research Overview',
-    totalPosts: 'Total Posts',
+    totalPosts: 'Tracked Posts',
     analyzedPosts: 'Analyzed Posts',
     savedIdeas: 'Saved Ideas',
     activeKeywords: 'Active Keywords',
     fetchTrending: 'Fetch Trending',
-    scanOpportunities: 'Scan New Posts',
-    scanningOpportunities: 'Scanning niches...',
-    scanOpportunitiesHelp: 'Scan enabled niches, measure engagement growth, and let AI shortlist posts that can become affiliate content.',
+    scanOpportunities: 'Scan Opportunities',
+    scanningOpportunities: 'Scanning keywords...',
+    scanOpportunitiesHelp: 'Scan enabled keywords, measure engagement growth, and let AI shortlist posts that can become affiliate content.',
     scanComplete: 'Post scan complete.',
     makeNow: 'Make Now',
     watch: 'Watch',
@@ -176,15 +249,18 @@ export const translations: Record<Language, TranslationCopy> = {
     confidence: 'Confidence',
     growth: 'Growth',
     recentSaved: 'Recent Saved',
-    feedResearch: 'Feed Research',
+    feedResearch: 'Manual research: search or fetch one keyword deeply on Threads.',
+    manualImportTitle: 'Analyze a Threads link',
+    manualImportHelp: 'Paste a post you found while browsing. The app imports the exact post and runs the same affiliate analysis workflow.',
+    manualImportPlaceholder: 'https://www.threads.com/@account/post/...',
+    manualImport: 'Import & Analyze',
+    manualImporting: 'Importing...',
+    manualImportComplete: 'Threads post imported and analyzed.',
     analyze: 'Analyze',
     savePost: 'Save',
     saved: 'Saved',
-    copyContent: 'Copy Content',
-    copied: 'Copied',
     postSaved: 'Post saved.',
     postRemovedFromSaved: 'Post removed from Saved Posts.',
-    contentCopied: 'Copied content and source link.',
     generateTikTokIdea: 'Generate TikTok Idea',
     openLink: 'Link',
     fetchAgainForLink: 'Fetch this keyword again to refresh the post permalink.',
@@ -215,8 +291,6 @@ export const translations: Record<Language, TranslationCopy> = {
     sourcePost: 'Source Post',
     productSearchKeywords: 'Marketplace Search Keywords',
     scriptOutline: 'Video Outline',
-    copyBrief: 'Copy Brief',
-    briefCopied: 'Brief copied.',
     createVideoDraft: 'Create Video Draft',
     renderingVideoDraft: 'Rendering video...',
     videoDraftHelp: 'AI voice reads the full selected Threads post while its card stays over the retention clip, then the video switches to your authorized product demo.',
@@ -229,10 +303,10 @@ export const translations: Record<Language, TranslationCopy> = {
     intentPending: 'intent pending',
     emptyDashboard: 'Fetch posts to populate the dashboard.',
     keywordManager: 'Keyword Manager',
-    keywordManagerHelp: 'Manage niche watchlists. Click Fetch to pull posts for a niche, and use toggles to include or exclude it from background monitoring.',
+    keywordManagerHelp: 'Manage keyword watchlists. Click Fetch to pull posts for a keyword, and use toggles to include or exclude it from background monitoring.',
     enabled: 'Enabled',
     disabled: 'Disabled',
-    addNiche: 'Add niche...',
+    addKeywordPlaceholder: 'Add keyword...',
     editKeyword: 'Edit keyword',
     deleteKeyword: 'Delete keyword',
     saveChanges: 'Save changes',
@@ -241,12 +315,7 @@ export const translations: Record<Language, TranslationCopy> = {
     keywordAdded: 'Keyword added.',
     export: 'Export',
     openAi: 'OpenAI',
-    elevenLabs: 'ElevenLabs Voice',
-    adamVoice: 'Adam voice for video drafts',
-    elevenLabsApiKeyPlaceholder: 'ElevenLabs API key',
-    elevenLabsApiKeyHelpSaved: 'An ElevenLabs API key is saved locally. Paste a new key only if you want to replace it.',
-    elevenLabsApiKeyHelpEmpty: 'Paste an ElevenLabs API key to generate video voiceovers with Adam.',
-    voiceId: 'Voice ID',
+    openAiBillingDashboard: 'Open OpenAI Billing',
     apiKeySaved: 'API key saved',
     apiKeyPlaceholder: 'OpenAI API key',
     apiKeyHelpSaved: 'An API key is saved locally. Paste a new key only if you want to replace it.',
@@ -260,20 +329,103 @@ export const translations: Record<Language, TranslationCopy> = {
     noSession: 'No session yet.',
     loggedInAs: 'Logged in as',
     accountUnknown: 'Account not detected yet.',
-    demoMode: 'Demo Mode',
     autoScan: 'Auto Scan While App Is Open',
     autoScanHelp: 'Optional. Auto scan only runs while this local app is open.',
     autoScanInterval: 'Auto Scan Interval',
     scanOnLaunch: 'Scan When App Opens',
     language: 'Language',
     english: 'English',
-    vietnamese: 'Vietnamese'
+    vietnamese: 'Vietnamese',
+    readyToCreate: 'Ready to Create',
+    trackedResults: 'Tracked Results',
+    todayShortlist: "Today's AI Shortlist",
+    todayShortlistHelp: 'Only the strongest posts are shown here. Create content now, watch the signal, or inspect the source.',
+    newPosts: 'new posts',
+    seenPosts: 'posts refreshed',
+    whyWorthMaking: 'Why it is worth making',
+    productToPromote: 'Product direction',
+    suggestedHook: 'Suggested hook',
+    pendingAiShortlist: 'Run the AI scan to complete this recommendation.',
+    createContent: 'Create Content',
+    inspectPost: 'Inspect',
+    noShortlistYet: 'No qualified opportunities yet',
+    noShortlistHelp: 'Run a scan. AI will filter the raw Threads results into a short action list.',
+    keywordIntelligence: 'AI Pain-point Discovery',
+    keywordIntelligenceHelp: 'Start from a niche or audience. AI expands it into natural phrases people use when describing problems and buying intent.',
+    keywordSeedPlaceholder: 'Example: office women, oily skin, small apartment...',
+    suggestingKeywords: 'Generating...',
+    addSuggestion: 'Add suggestion',
+    excludedKeywords: 'Excluded Terms',
+    excludedKeywordsHelp: 'Posts containing these terms are kept out of the AI opportunity shortlist.',
+    excludedKeywordPlaceholder: 'Example: politics, recruitment, giveaway...',
+    results: 'Results',
+    resultsHelp: 'Record real performance after publishing so future AI recommendations can learn from your channel.',
+    totalViews: 'Total Views',
+    clickRate: 'Click Rate',
+    orderConversion: 'Click to Order',
+    totalCommission: 'Commission',
+    addResult: 'Add Result',
+    editResult: 'Edit Result',
+    resultFormHelp: 'Update views, clicks, orders, and commission as the video collects data.',
+    chooseSourcePost: 'Choose source post',
+    productName: 'Product',
+    hookUsed: 'Hook used',
+    formatUsed: 'Content format',
+    views: 'Views',
+    clicks: 'Clicks',
+    orders: 'Orders',
+    revenue: 'Revenue (VND)',
+    commission: 'Commission (VND)',
+    published: 'Published',
+    tracking: 'Tracking',
+    winner: 'Winner',
+    stopped: 'Stopped',
+    note: 'Notes',
+    learnedSignals: 'Signals learned from your winners',
+    unknownProduct: 'Product not recorded',
+    noHookRecorded: 'No hook or format recorded.',
+    noResultsYet: 'No performance data yet. Add the first published video above.',
+    contentVariants: '3 Content Variants',
+    variant: 'Variant',
+    hookOpening: 'Opening hook',
+    aiDiscovery: 'AI Discovery',
+    manualKeyword: 'Add Manually',
+    chooseAudience: 'Choose a target audience',
+    chooseAudienceHelp: 'Pick a group. AI will mine natural pain-point phrases instead of asking you to guess keywords.',
+    refineAudiencePlaceholder: 'Optional: add a narrower situation or product direction...',
+    discoverPainPoints: 'Discover Pain Points',
+    discoveringKeywords: 'Discovering...',
+    expandFromWinners: 'Expand from Winners',
+    keywordSuggestions: 'Keyword candidates',
+    discoveryEvidence: 'Signals used',
+    strongPostsUsed: 'strong posts',
+    winnersUsed: 'winning videos',
+    addAllSuggestions: 'Add All',
+    noNewKeywordSuggestions: 'No new phrases were found outside your current keyword list.',
+    manualKeywordHelp: 'Use this only when you already know a specific trend or phrase worth monitoring.',
+    addKeyword: 'Add Keyword',
+    keywordPortfolio: 'Keyword Portfolio',
+    keywordPortfolioHelp: 'Keywords are ranked using fetch yield, AI-qualified posts, product fit and actual affiliate results.',
+    potential: 'Potential',
+    testing: 'Testing',
+    poor: 'Poor',
+    audienceSource: 'Audience',
+    keywordScore: 'Score',
+    disableSuggested: 'Disable',
+    scans: 'Scans',
+    postsFound: 'Posts found',
+    productFitRate: 'Product fit',
+    noKeywordsYet: 'No keywords yet. Use AI Discovery or add one manually.',
+    sourceManual: 'Manual',
+    sourceDefault: 'Starter',
+    sourceAiAudience: 'AI Audience',
+    sourceAiExpansion: 'AI Expansion'
   },
   vi: {
-    opportunityInbox: 'Bài viết hôm nay',
-    scanOpportunities: 'Quét bài viết mới',
-    scanningOpportunities: 'Đang quét các niche...',
-    scanOpportunitiesHelp: 'Quét các niche đang bật, đo tốc độ tăng tương tác và dùng AI shortlist bài có thể làm affiliate.',
+    opportunityInbox: 'Cơ hội hôm nay',
+    scanOpportunities: 'Quét cơ hội mới',
+    scanningOpportunities: 'Đang quét các từ khóa...',
+    scanOpportunitiesHelp: 'Quét các từ khóa đang bật, đo tốc độ tăng tương tác và dùng AI shortlist bài phù hợp để làm affiliate.',
     scanComplete: 'Đã quét xong bài viết affiliate.',
     makeNow: 'Làm ngay',
     watch: 'Theo dõi',
@@ -288,41 +440,41 @@ export const translations: Record<Language, TranslationCopy> = {
     appName: 'Trend Finder',
     appSubtitle: 'Nghiên cứu affiliate từ Threads',
     home: 'Trang chủ',
-    trendingFeed: 'Bài đang hot',
+    trendingFeed: 'Khám phá bài viết',
     keywords: 'Từ khóa',
     savedPosts: 'Bài đã lưu',
-    productSuggestions: 'Gợi ý sản phẩm',
     settings: 'Cài đặt',
-    guardrailsTitle: 'Giới hạn an toàn',
-    guardrailsBody: 'Chỉ dùng để nghiên cứu. Không tự động đăng bài, tạo tương tác giả, hoặc scrape quá mức.',
-    searchPlaceholder: 'Tìm bài hoặc fetch niche...',
+    searchPlaceholder: 'Tìm bài hoặc fetch từ khóa...',
     fetch: 'Fetch',
     postsSorted: 'bài được sắp xếp theo điểm đề xuất affiliate',
     replies: 'Replies',
     noMatchingPosts: 'Không có bài phù hợp.',
-    noPostsFound: 'Threads không trả về bài viết cho niche này. Hãy thử từ khóa rộng hơn.',
+    noPostsFound: 'Threads không trả về bài viết cho từ khóa này. Hãy thử từ khóa rộng hơn.',
     keywordMonitoring: 'Theo dõi từ khóa',
-    keywordMonitoringHelp: 'Danh sách niche đã lưu để fetch nhanh và dùng cho monitoring tự động sau này. Click từ khóa để fetch ngay; toggle để bật/tắt theo dõi nền.',
+    keywordMonitoringHelp: 'Danh sách từ khóa đã lưu để fetch nhanh và dùng cho monitoring tự động sau này. Click từ khóa để fetch ngay; toggle để bật/tắt theo dõi nền.',
     quickActions: 'Thao tác nhanh',
     topOpportunities: 'Bài viết nổi bật',
     latestScanPosts: 'Bài vừa quét',
     latestScanPostsHelp: 'Các bài được fetch trong lần quét gần nhất. Click một bài để mở trong Bài đang hot.',
     researchOverview: 'Tổng quan nghiên cứu',
-    totalPosts: 'Tổng số bài',
+    totalPosts: 'Bài đang theo dõi',
     analyzedPosts: 'Đã phân tích',
     savedIdeas: 'Idea đã lưu',
     activeKeywords: 'Từ khóa đang bật',
     fetchTrending: 'Fetch bài hot',
     recentSaved: 'Đã lưu gần đây',
-    feedResearch: 'Nghiên cứu feed',
+    feedResearch: 'Nghiên cứu thủ công: tìm hoặc fetch sâu một từ khóa cụ thể trên Threads.',
+    manualImportTitle: 'Phân tích nhanh từ link Threads',
+    manualImportHelp: 'Paste bài bạn tự thấy hay khi lướt Threads. Tool sẽ lấy đúng bài viết và chạy cùng luồng phân tích affiliate hiện tại.',
+    manualImportPlaceholder: 'https://www.threads.com/@account/post/...',
+    manualImport: 'Nhập link & phân tích',
+    manualImporting: 'Đang lấy bài...',
+    manualImportComplete: 'Đã nhập và phân tích bài Threads.',
     analyze: 'Phân tích',
     savePost: 'Lưu',
     saved: 'Đã lưu',
-    copyContent: 'Copy nội dung',
-    copied: 'Đã copy',
     postSaved: 'Đã lưu bài viết.',
     postRemovedFromSaved: 'Đã bỏ bài viết khỏi danh sách lưu.',
-    contentCopied: 'Đã copy nội dung và link nguồn.',
     generateTikTokIdea: 'Tạo ý tưởng TikTok',
     openLink: 'Link',
     selectPostPrompt: 'Chọn một bài để xem tiềm năng viral.',
@@ -352,8 +504,6 @@ export const translations: Record<Language, TranslationCopy> = {
     sourcePost: 'Bài nguồn',
     productSearchKeywords: 'Từ khóa tìm sản phẩm',
     scriptOutline: 'Outline video',
-    copyBrief: 'Copy brief',
-    briefCopied: 'Đã copy brief.',
     createVideoDraft: 'Tạo video nháp',
     renderingVideoDraft: 'Đang render video...',
     videoDraftHelp: 'Giọng AI đọc nguyên văn toàn bộ bài Threads trong khi card bài viết giữ trên clip retention, sau đó video chuyển sang clip demo sản phẩm của bạn.',
@@ -366,10 +516,10 @@ export const translations: Record<Language, TranslationCopy> = {
     intentPending: 'chưa có intent',
     emptyDashboard: 'Fetch bài viết để có dữ liệu dashboard.',
     keywordManager: 'Quản lý từ khóa',
-    keywordManagerHelp: 'Quản lý danh sách niche. Bấm Fetch để kéo bài theo niche, toggle để bật/tắt theo dõi nền.',
+    keywordManagerHelp: 'Quản lý danh sách từ khóa. Bấm Fetch để kéo bài theo từ khóa, toggle để bật/tắt theo dõi nền.',
     enabled: 'Đang bật',
     disabled: 'Đang tắt',
-    addNiche: 'Thêm niche...',
+    addKeywordPlaceholder: 'Thêm từ khóa...',
     editKeyword: 'Sửa từ khóa',
     deleteKeyword: 'Xóa từ khóa',
     saveChanges: 'Lưu thay đổi',
@@ -378,12 +528,7 @@ export const translations: Record<Language, TranslationCopy> = {
     keywordAdded: 'Đã thêm từ khóa.',
     export: 'Export',
     openAi: 'OpenAI',
-    elevenLabs: 'Giọng đọc ElevenLabs',
-    adamVoice: 'Giọng Adam cho video nháp',
-    elevenLabsApiKeyPlaceholder: 'ElevenLabs API key',
-    elevenLabsApiKeyHelpSaved: 'ElevenLabs API key đã được lưu cục bộ. Chỉ paste key mới nếu muốn thay thế.',
-    elevenLabsApiKeyHelpEmpty: 'Paste ElevenLabs API key để tạo voiceover video bằng giọng Adam.',
-    voiceId: 'Voice ID',
+    openAiBillingDashboard: 'Mở Billing OpenAI',
     apiKeySaved: 'Đã lưu API key',
     apiKeyPlaceholder: 'OpenAI API key',
     apiKeyHelpSaved: 'API key đã được lưu cục bộ. Chỉ paste key mới nếu muốn thay thế.',
@@ -397,9 +542,92 @@ export const translations: Record<Language, TranslationCopy> = {
     noSession: 'Chưa có session.',
     loggedInAs: 'Đang đăng nhập',
     accountUnknown: 'Chưa nhận diện được tài khoản.',
-    demoMode: 'Chế độ demo',
     language: 'Ngôn ngữ',
     english: 'Tiếng Anh',
-    vietnamese: 'Tiếng Việt'
+    vietnamese: 'Tiếng Việt',
+    readyToCreate: 'Sẵn sàng làm',
+    trackedResults: 'Video có kết quả',
+    todayShortlist: 'AI shortlist hôm nay',
+    todayShortlistHelp: 'Chỉ giữ các bài đáng hành động. Bạn có thể làm nội dung ngay, theo dõi thêm hoặc mở bài gốc để kiểm tra.',
+    newPosts: 'bài mới',
+    seenPosts: 'bài được cập nhật',
+    whyWorthMaking: 'Vì sao đáng làm',
+    productToPromote: 'Hướng sản phẩm',
+    suggestedHook: 'Hook đề xuất',
+    pendingAiShortlist: 'Quét bằng AI để hoàn thiện đề xuất này.',
+    createContent: 'Tạo nội dung',
+    inspectPost: 'Xem chi tiết',
+    noShortlistYet: 'Chưa có cơ hội đủ tốt',
+    noShortlistHelp: 'Bấm quét bài mới. AI sẽ lọc kết quả Threads thô thành một danh sách ngắn có thể hành động.',
+    keywordIntelligence: 'AI tìm pain point',
+    keywordIntelligenceHelp: 'Nhập một nhóm người hoặc chủ đề. AI sẽ mở rộng thành những cụm từ tự nhiên người Việt dùng khi than phiền, hỏi kinh nghiệm hoặc có ý định mua.',
+    keywordSeedPlaceholder: 'Ví dụ: dân công sở nữ, da dầu, phòng trọ nhỏ...',
+    suggestingKeywords: 'Đang gợi ý...',
+    addSuggestion: 'Thêm từ khóa này',
+    excludedKeywords: 'Từ khóa loại trừ',
+    excludedKeywordsHelp: 'Bài chứa các cụm từ này sẽ không được đưa vào shortlist cơ hội affiliate.',
+    excludedKeywordPlaceholder: 'Ví dụ: chính trị, tuyển dụng, giveaway...',
+    results: 'Kết quả',
+    resultsHelp: 'Ghi lại hiệu suất thật sau khi đăng để những lần phân tích sau học từ chính kênh của bạn.',
+    totalViews: 'Tổng lượt xem',
+    clickRate: 'Tỷ lệ click',
+    orderConversion: 'Click thành đơn',
+    totalCommission: 'Hoa hồng',
+    addResult: 'Thêm kết quả',
+    editResult: 'Sửa kết quả',
+    resultFormHelp: 'Cập nhật lượt xem, click, đơn và hoa hồng khi video có thêm dữ liệu.',
+    chooseSourcePost: 'Chọn bài nguồn',
+    productName: 'Tên sản phẩm',
+    hookUsed: 'Hook đã dùng',
+    formatUsed: 'Format nội dung',
+    views: 'Lượt xem',
+    clicks: 'Lượt click',
+    orders: 'Đơn hàng',
+    revenue: 'Doanh thu (VND)',
+    commission: 'Hoa hồng (VND)',
+    published: 'Đã đăng',
+    tracking: 'Đang theo dõi',
+    winner: 'Video thắng',
+    stopped: 'Đã dừng',
+    note: 'Ghi chú',
+    learnedSignals: 'Tín hiệu học được từ video thắng',
+    unknownProduct: 'Chưa ghi sản phẩm',
+    noHookRecorded: 'Chưa ghi hook hoặc format.',
+    noResultsYet: 'Chưa có dữ liệu hiệu suất. Hãy thêm video đầu tiên sau khi đăng.',
+    contentVariants: '3 biến thể nội dung',
+    variant: 'Biến thể',
+    hookOpening: 'Hook mở đầu',
+    aiDiscovery: 'AI tự khám phá',
+    manualKeyword: 'Thêm thủ công',
+    chooseAudience: 'Chọn nhóm khách hàng',
+    chooseAudienceHelp: 'Chọn một nhóm người. AI sẽ đào các cụm pain point tự nhiên thay vì bắt bạn tự đoán từ khóa.',
+    refineAudiencePlaceholder: 'Tùy chọn: thêm tình huống hoặc hướng sản phẩm cụ thể...',
+    discoverPainPoints: 'Khám phá pain point',
+    discoveringKeywords: 'Đang khám phá...',
+    expandFromWinners: 'Mở rộng từ dữ liệu thắng',
+    keywordSuggestions: 'Từ khóa tiềm năng',
+    discoveryEvidence: 'Tín hiệu đã dùng',
+    strongPostsUsed: 'bài tốt',
+    winnersUsed: 'video có kết quả',
+    addAllSuggestions: 'Thêm tất cả',
+    noNewKeywordSuggestions: 'AI chưa tìm được cụm mới ngoài danh sách hiện tại.',
+    manualKeywordHelp: 'Chỉ dùng khi bạn đã biết một trend hoặc cụm từ cụ thể cần theo dõi.',
+    addKeyword: 'Thêm từ khóa',
+    keywordPortfolio: 'Danh mục từ khóa',
+    keywordPortfolioHelp: 'Từ khóa được đánh giá bằng hiệu suất fetch, bài AI chọn, độ phù hợp sản phẩm và kết quả affiliate thật.',
+    potential: 'Tiềm năng',
+    testing: 'Đang thử',
+    poor: 'Kém hiệu quả',
+    audienceSource: 'Nhóm khách hàng',
+    keywordScore: 'Điểm',
+    disableSuggested: 'Tắt đề xuất',
+    scans: 'Lần quét',
+    postsFound: 'Bài tìm được',
+    productFitRate: 'Có sản phẩm',
+    noKeywordsYet: 'Chưa có từ khóa. Hãy dùng AI tự khám phá hoặc thêm thủ công.',
+    sourceManual: 'Thủ công',
+    sourceDefault: 'Khởi tạo',
+    sourceAiAudience: 'AI theo audience',
+    sourceAiExpansion: 'AI mở rộng'
   }
 };

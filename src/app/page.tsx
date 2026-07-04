@@ -1,16 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { BarChart3, Bookmark, Check, Download, Filter, KeyRound, LogIn, Pencil, Plus, Radar, RefreshCcw, Search, SlidersHorizontal, Sparkles, Trash2, TrendingUp, X } from 'lucide-react';
+/* eslint-disable @next/next/no-img-element */
+
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { ChevronDown, ExternalLink, Filter, FolderOpen, Link2, LogIn, Play, RefreshCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import { AnalysisPanel } from '@/components/analysis/analysis-panel';
-import { formatTikTokBrief, TikTokBriefModal } from '@/components/analysis/tiktok-brief-modal';
+import { TikTokBriefModal } from '@/components/analysis/tiktok-brief-modal';
 import { FeedCard } from '@/components/feed/feed-card';
+import { KeywordManager } from '@/components/keywords/keyword-manager';
 import { Sidebar } from '@/components/layout/sidebar';
+import { OpportunityInbox } from '@/components/opportunities/opportunity-inbox';
+import { ResultsView } from '@/components/results/results-view';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { translations, type Language, type TranslationCopy } from '@/lib/i18n';
 import { formatModelPrice, openAIModelOptions, recommendedOpenAIModel } from '@/lib/openai-models';
-import type { AIAnalysis, AppSettings, FetchMode, Keyword, SavedPost, ServiceHealth, ThreadsPost, VideoDraftProgress } from '@/lib/types';
+import { filterUsefulReplies } from '@/lib/replies';
+import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, FetchMode, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, OpportunityScanProgress, SavedPost, ServiceHealth, ThreadsPost, UpdateSettingsRequest, UploadLogEntry, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export default function HomePage() {
@@ -19,6 +25,8 @@ export default function HomePage() {
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [analysis, setAnalysis] = useState<Record<string, AIAnalysis>>({});
   const [keywords, setKeywords] = useState<Keyword[]>([]);
+  const [keywordInsights, setKeywordInsights] = useState<KeywordInsight[]>([]);
+  const [keywordExclusions, setKeywordExclusions] = useState<KeywordExclusion[]>([]);
   const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [health, setHealth] = useState<ServiceHealth | null>(null);
@@ -26,15 +34,20 @@ export default function HomePage() {
   const [query, setQuery] = useState('');
   const [fetchMode, setFetchMode] = useState<FetchMode>('keyword');
   const [isFetching, setIsFetching] = useState(false);
+  const [manualPostUrl, setManualPostUrl] = useState('');
+  const [isImportingPost, setIsImportingPost] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [latestScanPosts, setLatestScanPosts] = useState<ThreadsPost[]>([]);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [briefPostId, setBriefPostId] = useState<string | null>(null);
-  const [briefCopied, setBriefCopied] = useState(false);
   const [isRenderingVideo, setIsRenderingVideo] = useState(false);
   const [videoRenderProgress, setVideoRenderProgress] = useState<VideoDraftProgress | null>(null);
   const [renderedVideoPath, setRenderedVideoPath] = useState<string | null>(null);
+  const [assets, setAssets] = useState<AssetLibraryItem[]>([]);
+  const [uploadLogs, setUploadLogs] = useState<UploadLogEntry[]>([]);
+  const [replyPost, setReplyPost] = useState<ThreadsPost | null>(null);
+  const [loadingRepliesId, setLoadingRepliesId] = useState<string | null>(null);
+  const [scanSummary, setScanSummary] = useState<{ newPosts: number; seenPosts: number } | null>(null);
+  const [scanProgress, setScanProgress] = useState<OpportunityScanProgress | null>(null);
   const [newKeyword, setNewKeyword] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const scannedOnLaunch = useRef(false);
@@ -45,29 +58,43 @@ export default function HomePage() {
     setHealth(message);
   }, []);
 
+  const refreshSettings = useCallback(async () => {
+    const api = window.desktopAPI;
+    if (api) setSettings(await api.getSettings());
+  }, []);
+
+  const refreshKeywordWorkspace = useCallback(async () => {
+    const api = window.desktopAPI;
+    if (!api) return;
+    const [storedKeywords, storedExclusions, storedInsights] = await Promise.all([
+      api.getKeywords(),
+      api.getKeywordExclusions(),
+      api.getKeywordInsights()
+    ]);
+    setKeywords(storedKeywords);
+    setKeywordExclusions(storedExclusions);
+    setKeywordInsights(storedInsights);
+  }, []);
+
   const selectedPost = posts.find((post) => post.id === selectedId) ?? posts[0];
   const selectedAnalysis = selectedPost ? analysis[selectedPost.id] : null;
   const briefPost = briefPostId ? posts.find((post) => post.id === briefPostId) : undefined;
   const briefAnalysis = briefPost ? analysis[briefPost.id] : undefined;
   const savedIds = useMemo(() => new Set(savedPosts.map((item) => item.postId)), [savedPosts]);
-  const analyzedCount = Object.keys(analysis).length;
   const activeKeywords = keywords.filter((keyword) => keyword.enabled);
-  const topPosts = useMemo(() => [...posts].sort((a, b) => b.opportunityScore - a.opportunityScore).slice(0, 5), [posts]);
-  const shouldShowFeedTools = activeView === 'trending' || activeView === 'saved' || activeView === 'products';
-  const shouldShowAnalysisPanel = activeView === 'trending' || activeView === 'saved' || activeView === 'products';
+  const shouldShowFeedTools = activeView === 'trending' || activeView === 'saved';
+  const shouldShowAnalysisPanel = activeView === 'trending' || activeView === 'saved';
 
   const visiblePosts = useMemo(() => {
     const filtered =
       activeView === 'saved'
         ? posts.filter((post) => savedIds.has(post.id))
-        : activeView === 'products'
-          ? posts.filter((post) => analysis[post.id])
-          : posts;
+        : posts;
 
     return filtered
       .filter((post) => (query.trim() ? `${post.content} ${post.keyword ?? ''} ${post.author}`.toLowerCase().includes(query.toLowerCase()) : true))
       .sort((a, b) => b.opportunityScore - a.opportunityScore);
-  }, [activeView, analysis, posts, query, savedIds]);
+  }, [activeView, posts, query, savedIds]);
 
   const runFetch = useCallback(
     async (mode: FetchMode = fetchMode, phrase = query, maxPosts = 40) => {
@@ -82,7 +109,8 @@ export default function HomePage() {
         setError(null);
         showHealth(null);
         const result = await api.fetchThreads({ mode, query: phrase, maxPosts });
-        setPosts((current) => mergePosts(result.posts, current));
+        setPosts(mergePosts(result.posts, await api.getPosts()));
+        if (mode === 'keyword') await refreshKeywordWorkspace();
         if (result.posts[0]) setSelectedId(result.posts[0].id);
         if (result.warning === 'no_posts_found') showHealth({ ok: false, message: copy.noPostsFound });
       } catch (fetchError) {
@@ -91,7 +119,7 @@ export default function HomePage() {
         setIsFetching(false);
       }
     },
-    [copy.noPostsFound, fetchMode, query, showHealth]
+    [copy.noPostsFound, fetchMode, query, refreshKeywordWorkspace, showHealth]
   );
 
   const handleAnalyze = useCallback(async (post: ThreadsPost) => {
@@ -109,6 +137,8 @@ export default function HomePage() {
       if (result) {
         setAnalysis((current) => ({ ...current, [post.id]: result }));
         setSelectedId(post.id);
+        if (post.keyword) await refreshKeywordWorkspace();
+        await refreshSettings();
       }
       return result ?? null;
     } catch (analyzeError) {
@@ -117,41 +147,49 @@ export default function HomePage() {
     } finally {
       setAnalyzingId(null);
     }
-  }, [showHealth]);
+  }, [refreshKeywordWorkspace, refreshSettings, showHealth]);
 
   const runOpportunityScan = useCallback(async () => {
     const api = window.desktopAPI;
     if (!api || isScanning) return;
 
     setIsScanning(true);
+    setScanProgress({ phase: 'fetching', current: 0, total: activeKeywords.length, percent: 2, message: 'Đang chuẩn bị quét từ khóa...' });
     setError(null);
     showHealth(null);
     try {
       const result = await api.scanOpportunities();
-      setPosts((current) => mergePosts(result.posts, current));
-      setLatestScanPosts(result.latestScanPosts);
+      setPosts(await api.getPosts());
+      setSettings(await api.getSettings());
+      setScanSummary({ newPosts: result.newPosts, seenPosts: result.seenPosts });
       setAnalysis((current) => ({ ...current, ...Object.fromEntries(result.analyses.map((item) => [item.postId, item])) }));
+      await refreshKeywordWorkspace();
       if (result.posts[0]) setSelectedId(result.posts[0].id);
-      showHealth({ ok: true, message: `${copy.scanComplete} ${result.keywordsScanned} niche, ${result.fetchedPosts} post, ${result.analyzedPosts} AI brief.` });
+      showHealth({ ok: true, message: `${copy.scanComplete} ${result.newPosts} bài mới · ${result.seenPosts} bài đã thấy · ${result.analyzedPosts} AI brief · dọn ${result.prunedPosts} bài cũ.` });
       if (result.errors.length) setError(result.errors.join('\n'));
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : String(scanError));
     } finally {
       setIsScanning(false);
     }
-  }, [copy.scanComplete, isScanning, showHealth]);
+  }, [activeKeywords.length, copy.scanComplete, isScanning, refreshKeywordWorkspace, showHealth]);
 
   useEffect(() => {
     const api = window.desktopAPI;
     if (!api) return;
 
-    Promise.all([api.getPosts(), api.getKeywords(), api.getSavedPosts()]).then(([storedPosts, storedKeywords, storedSaved]) => {
+    Promise.all([api.getPosts(), api.getAnalyses(), api.getKeywords(), api.getKeywordExclusions(), api.getKeywordInsights(), api.getSavedPosts(), api.getAssets(), api.getUploadLogs()]).then(([storedPosts, storedAnalyses, storedKeywords, storedExclusions, storedInsights, storedSaved, storedAssets, storedUploadLogs]) => {
       if (storedPosts.length) {
         setPosts(storedPosts);
         setSelectedId(storedPosts[0].id);
       }
+      setAnalysis(Object.fromEntries(storedAnalyses.map((item) => [item.postId, item])));
       setKeywords(storedKeywords);
+      setKeywordExclusions(storedExclusions);
+      setKeywordInsights(storedInsights);
       setSavedPosts(storedSaved);
+      setAssets(storedAssets);
+      setUploadLogs(storedUploadLogs);
     });
     api.getSettings().then(setSettings);
   }, []);
@@ -160,6 +198,12 @@ export default function HomePage() {
     const api = window.desktopAPI;
     if (!api) return;
     return api.onVideoDraftProgress(setVideoRenderProgress);
+  }, []);
+
+  useEffect(() => {
+    const api = window.desktopAPI;
+    if (!api) return;
+    return api.onOpportunityScanProgress(setScanProgress);
   }, []);
 
   useEffect(() => {
@@ -219,37 +263,48 @@ export default function HomePage() {
     }
   }
 
-  async function handleCopy(post: ThreadsPost) {
-    try {
-      await navigator.clipboard.writeText(`${post.content}\n\n${copy.sourcePost}: ${post.url}`);
-      setCopiedId(post.id);
-      showHealth({ ok: true, message: copy.contentCopied });
-      window.setTimeout(() => setCopiedId((current) => (current === post.id ? null : current)), 2200);
-    } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : String(copyError));
-    }
-  }
-
   async function handleGenerateTikTokIdea(post: ThreadsPost) {
     setSelectedId(post.id);
-    setBriefCopied(false);
     const current = analysis[post.id];
     const result = current?.scriptOutline.length && current.productSearchKeywords.length ? current : await handleAnalyze(post);
     if (result) setBriefPostId(post.id);
   }
 
-  async function handleCopyBrief() {
-    if (!briefPost || !briefAnalysis) return;
+  async function importPostFromLink() {
+    const url = manualPostUrl.trim();
+    if (!url || isImportingPost) return;
+    const api = window.desktopAPI;
+    if (!api) {
+      setError('Desktop API is unavailable. Run this inside Electron.');
+      return;
+    }
+
+    setIsImportingPost(true);
+    setError(null);
+    showHealth(null);
     try {
-      await navigator.clipboard.writeText(formatTikTokBrief(briefPost, briefAnalysis, copy));
-      setBriefCopied(true);
-      showHealth({ ok: true, message: copy.briefCopied });
-    } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : String(copyError));
+      const post = await api.importThreadsPost(url);
+      setPosts(mergePosts([post], await api.getPosts()));
+      setSelectedId(post.id);
+      setManualPostUrl('');
+
+      const storedAnalysis = analysis[post.id] ?? await api.getAnalysis(post.id);
+      if (storedAnalysis) {
+        setAnalysis((current) => ({ ...current, [post.id]: storedAnalysis }));
+        showHealth({ ok: true, message: copy.manualImportComplete });
+        return;
+      }
+
+      const result = await handleAnalyze(post);
+      if (result) showHealth({ ok: true, message: copy.manualImportComplete });
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : String(importError));
+    } finally {
+      setIsImportingPost(false);
     }
   }
 
-  async function handleRenderVideoDraft() {
+  async function handleRenderVideoDraft(overrides?: Partial<VideoDraftRequest>) {
     if (!briefPost || !briefAnalysis) return;
     const api = window.desktopAPI;
     if (!api) {
@@ -262,14 +317,25 @@ export default function HomePage() {
     setRenderedVideoPath(null);
     setError(null);
     try {
-      const result = await api.renderVideoDraft({ post: briefPost, analysis: briefAnalysis });
+      const result = await api.renderVideoDraft({ post: briefPost, analysis: briefAnalysis, ...overrides });
       if (result.filePath) setRenderedVideoPath(result.filePath);
       showHealth({ ok: result.ok, message: result.ok ? copy.videoDraftReady : result.message });
     } catch (renderError) {
       setError(renderError instanceof Error ? renderError.message : String(renderError));
     } finally {
+      await refreshSettings();
       setIsRenderingVideo(false);
     }
+  }
+
+  async function addAsset(type: AssetType) {
+    const item = await window.desktopAPI?.addAsset(type);
+    if (item && window.desktopAPI) setAssets(await window.desktopAPI.getAssets());
+  }
+
+  async function deleteAsset(id: string) {
+    await window.desktopAPI?.deleteAsset(id);
+    if (window.desktopAPI) setAssets(await window.desktopAPI.getAssets());
   }
 
   async function handleOpenVideoOutputFolder() {
@@ -278,8 +344,8 @@ export default function HomePage() {
     if (result && !result.ok) showHealth(result);
   }
 
-  async function handleAddKeyword() {
-    const phrase = newKeyword.trim();
+  async function handleAddKeyword(suggestedPhrase?: string, source: Keyword['source'] = 'manual', seedAudience?: string) {
+    const phrase = (suggestedPhrase ?? newKeyword).trim();
     if (!phrase) return;
 
     const api = window.desktopAPI;
@@ -290,20 +356,46 @@ export default function HomePage() {
 
     try {
       setError(null);
-      await api.addKeyword(phrase);
-      setKeywords(await api.getKeywords());
-      setNewKeyword('');
+      await api.addKeyword({ phrase, source, seedAudience });
+      await refreshKeywordWorkspace();
+      if (!suggestedPhrase) setNewKeyword('');
       showHealth({ ok: true, message: copy.keywordAdded });
     } catch (keywordError) {
       setError(keywordError instanceof Error ? keywordError.message : String(keywordError));
     }
   }
 
+  async function discoverKeywords(request: Omit<KeywordDiscoveryRequest, 'existingKeywords'>): Promise<KeywordDiscoveryResult> {
+    const api = window.desktopAPI;
+    if (!api) return { suggestions: [], postsUsed: 0, winnersUsed: 0 };
+    try {
+      setError(null);
+      return await api.discoverKeywords({ ...request, existingKeywords: keywords.map((keyword) => keyword.phrase) });
+    } catch (suggestionError) {
+      setError(suggestionError instanceof Error ? suggestionError.message : String(suggestionError));
+      return { suggestions: [], postsUsed: 0, winnersUsed: 0 };
+    }
+  }
+
+  async function addKeywordExclusion(phrase: string) {
+    const api = window.desktopAPI;
+    if (!api) return;
+    await api.addKeywordExclusion(phrase);
+    await refreshKeywordWorkspace();
+  }
+
+  async function deleteKeywordExclusion(id: string) {
+    const api = window.desktopAPI;
+    if (!api) return;
+    await api.deleteKeywordExclusion(id);
+    await refreshKeywordWorkspace();
+  }
+
   async function toggleKeyword(keyword: Keyword) {
     const next = !keyword.enabled;
     const api = window.desktopAPI;
     if (api) await api.setKeywordEnabled(keyword.id, next);
-    setKeywords((current) => current.map((item) => (item.id === keyword.id ? { ...item, enabled: next } : item)));
+    await refreshKeywordWorkspace();
   }
 
   async function updateKeyword(id: string, phrase: string) {
@@ -313,7 +405,7 @@ export default function HomePage() {
     if (!api) return;
     try {
       await api.updateKeyword(id, normalized);
-      setKeywords(await api.getKeywords());
+      await refreshKeywordWorkspace();
     } catch (keywordError) {
       setError(keywordError instanceof Error ? keywordError.message : String(keywordError));
     }
@@ -325,15 +417,10 @@ export default function HomePage() {
     try {
       setError(null);
       await api.deleteKeyword(id);
-      setKeywords(await api.getKeywords());
+      await refreshKeywordWorkspace();
     } catch (keywordError) {
       setError(keywordError instanceof Error ? keywordError.message : String(keywordError));
     }
-  }
-
-  async function exportIdeas() {
-    const api = window.desktopAPI;
-    if (api) await api.exportIdeas();
   }
 
   async function openPostLink(post: ThreadsPost) {
@@ -341,7 +428,36 @@ export default function HomePage() {
     if (result && !result.ok) showHealth({ ok: false, message: copy.fetchAgainForLink });
   }
 
-  async function saveSettings(next: { openAiApiKey?: string; openAiModel?: string; elevenLabsApiKey?: string; elevenLabsVoiceId?: string; language?: Language; allowDemoMode?: boolean; autoScanEnabled?: boolean; autoScanMinutes?: number; scanOnLaunch?: boolean }) {
+  async function loadOrShowReplies(post: ThreadsPost) {
+    const usefulReplies = filterUsefulReplies(post.topReplies);
+    if (usefulReplies.length) {
+      setReplyPost({ ...post, topReplies: usefulReplies });
+      return;
+    }
+    const api = window.desktopAPI;
+    if (!api) return;
+    setLoadingRepliesId(post.id);
+    setError(null);
+    try {
+      const updated = await api.fetchPostReplies(post);
+      const filteredReplies = filterUsefulReplies(updated.topReplies);
+      const cleaned = { ...updated, topReplies: filteredReplies };
+      setPosts((current) => mergePosts([cleaned], current));
+      setReplyPost(cleaned);
+      showHealth({
+        ok: filteredReplies.length > 0,
+        message: filteredReplies.length
+          ? `Đã tải ${filteredReplies.length} top replies.`
+          : 'Threads không trả về nội dung replies cho bài này. Tổng số reply vẫn được giữ nguyên.'
+      });
+    } catch (replyError) {
+      setError(replyError instanceof Error ? replyError.message : String(replyError));
+    } finally {
+      setLoadingRepliesId(null);
+    }
+  }
+
+  async function saveSettings(next: UpdateSettingsRequest) {
     const api = window.desktopAPI;
     if (!api) {
       setError('Desktop API is unavailable. Run this inside Electron.');
@@ -390,7 +506,7 @@ export default function HomePage() {
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex min-h-20 items-center justify-between gap-4 border-b border-border bg-background/95 px-5">
           <div className="min-w-0">
-            <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted">{activeView.replace('-', ' ')}</div>
+            <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted">{sectionLabelForView(activeView)}</div>
             <h1 className="truncate text-xl font-semibold text-text">{titleForView(activeView, copy)}</h1>
           </div>
 
@@ -417,50 +533,83 @@ export default function HomePage() {
           ) : null}
 
           {activeView === 'home' ? (
-            <HomeDashboard
-              activeKeywords={activeKeywords.length}
-              analyzedCount={analyzedCount}
+            <OpportunityInbox
               copy={copy}
               posts={posts}
-              savedCount={savedPosts.length}
-              topPosts={topPosts}
               analyses={analysis}
+              logs={uploadLogs}
+              savedIds={savedIds}
               isScanning={isScanning}
-              latestScanPosts={latestScanPosts}
+              scanSummary={scanSummary}
+              scanProgress={scanProgress}
               onScan={runOpportunityScan}
-              onSelectPost={(id) => {
-                setSelectedId(id);
+              onCreate={handleGenerateTikTokIdea}
+              onOpenLink={openPostLink}
+              onSave={handleSave}
+              onInspect={(post) => {
+                setSelectedId(post.id);
                 changeView('trending');
               }}
             />
           ) : activeView === 'keywords' ? (
-            <KeywordsView
+            <KeywordManager
               copy={copy}
+              exclusions={keywordExclusions}
+              insights={keywordInsights}
               keywords={keywords}
+              language={language}
               newKeyword={newKeyword}
+              onAddExclusion={addKeywordExclusion}
               onAddKeyword={handleAddKeyword}
-              onExport={exportIdeas}
+              onDeleteExclusion={deleteKeywordExclusion}
               onFetchKeyword={(phrase) => runFetch('keyword', phrase, 24)}
               onNewKeyword={setNewKeyword}
+              onDiscover={discoverKeywords}
               onToggleKeyword={toggleKeyword}
               onUpdateKeyword={updateKeyword}
               onDeleteKeyword={deleteKeyword}
             />
           ) : activeView === 'settings' ? (
-            <SettingsView settings={settings} copy={copy} onSave={saveSettings} onSaveOpenAI={saveAndVerifyOpenAI} onLoginThreads={loginThreads} onCheckThreads={checkThreadsSession} />
+            <SettingsView settings={settings} copy={copy} onSave={saveSettings} onSaveOpenAI={saveAndVerifyOpenAI} onLoginThreads={loginThreads} onCheckThreads={checkThreadsSession} onOpenBilling={() => window.desktopAPI?.openOpenAiBilling()} />
+          ) : activeView === 'assets' ? (
+            <AssetLibraryView assets={assets} onAdd={addAsset} onDelete={deleteAsset} onPreview={(id) => window.desktopAPI?.openAssetPreview(id)} />
+          ) : activeView === 'uploads' ? (
+            <ResultsView
+              copy={copy}
+              logs={uploadLogs}
+              posts={posts}
+              onDelete={async (id): Promise<void> => {
+                await window.desktopAPI?.deleteUploadLog(id);
+                if (window.desktopAPI) {
+                  setUploadLogs(await window.desktopAPI.getUploadLogs());
+                  await refreshKeywordWorkspace();
+                }
+              }}
+              onSave={async (entry): Promise<void> => {
+                await window.desktopAPI?.saveUploadLog(entry);
+                if (window.desktopAPI) {
+                  setUploadLogs(await window.desktopAPI.getUploadLogs());
+                  await refreshKeywordWorkspace();
+                }
+              }}
+            />
           ) : (
             <FeedView
               copy={copy}
+              manualPostUrl={manualPostUrl}
+              isImportingPost={isImportingPost}
               posts={visiblePosts}
               selectedPostId={selectedPost?.id}
               analyzingId={analyzingId}
-              copiedId={copiedId}
+              loadingRepliesId={loadingRepliesId}
               savedIds={savedIds}
               onAnalyze={handleAnalyze}
-              onCopy={handleCopy}
               onGenerateTikTokIdea={handleGenerateTikTokIdea}
               onOpenLink={openPostLink}
+              onImportPost={importPostFromLink}
+              onManualPostUrl={setManualPostUrl}
               onRepliesSort={() => setPosts((current) => [...current].sort((a, b) => b.replies - a.replies))}
+              onShowReplies={loadOrShowReplies}
               onSave={handleSave}
               onSelect={setSelectedId}
             />
@@ -473,19 +622,19 @@ export default function HomePage() {
       {briefPost && briefAnalysis ? (
         <TikTokBriefModal
           analysis={briefAnalysis}
-          copied={briefCopied}
+          assets={assets}
           copy={copy}
           post={briefPost}
           renderProgress={videoRenderProgress}
           renderedVideoPath={renderedVideoPath}
           renderingVideo={isRenderingVideo}
           onClose={() => setBriefPostId(null)}
-          onCopy={handleCopyBrief}
           onOpenLink={() => openPostLink(briefPost)}
           onOpenOutputFolder={handleOpenVideoOutputFolder}
           onRenderVideo={handleRenderVideoDraft}
         />
       ) : null}
+      {replyPost ? <RepliesDrawer loading={loadingRepliesId === replyPost.id} post={replyPost} onClose={() => setReplyPost(null)} onReload={() => loadOrShowReplies({ ...replyPost, topReplies: [] })} /> : null}
     </main>
   );
 }
@@ -529,339 +678,116 @@ function FetchToolbar({
   );
 }
 
-function HomeDashboard({
-  activeKeywords,
-  analyses,
-  analyzedCount,
-  copy,
-  isScanning,
-  latestScanPosts,
-  posts,
-  savedCount,
-  topPosts,
-  onScan,
-  onSelectPost
-}: {
-  activeKeywords: number;
-  analyses: Record<string, AIAnalysis>;
-  analyzedCount: number;
-  copy: TranslationCopy;
-  isScanning: boolean;
-  latestScanPosts: ThreadsPost[];
-  posts: ThreadsPost[];
-  savedCount: number;
-  topPosts: ThreadsPost[];
-  onScan: () => void;
-  onSelectPost: (id: string) => void;
-}) {
-  return (
-    <div className="space-y-5">
-      <section className="grid grid-cols-4 gap-3">
-        <DashboardMetric icon={<BarChart3 className="size-4" />} label={copy.totalPosts} value={posts.length} />
-        <DashboardMetric icon={<Sparkles className="size-4" />} label={copy.analyzedPosts} value={analyzedCount} />
-        <DashboardMetric icon={<Bookmark className="size-4" />} label={copy.savedIdeas} value={savedCount} />
-        <DashboardMetric icon={<KeyRound className="size-4" />} label={copy.activeKeywords} value={activeKeywords} />
-      </section>
-
-      {latestScanPosts.length ? (
-        <section className="rounded-lg border border-border bg-panel p-5">
-          <div className="mb-1 text-base font-semibold text-text">{copy.latestScanPosts}</div>
-          <div className="mb-4 text-sm text-muted">{copy.latestScanPostsHelp}</div>
-          <div className="space-y-2">
-            {latestScanPosts.slice(0, 10).map((post) => (
-              <button key={post.id} className="flex w-full items-center justify-between gap-4 rounded-md border border-border bg-panelSoft px-3 py-3 text-left transition hover:border-accent/60" onClick={() => onSelectPost(post.id)}>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate text-sm font-semibold text-text">{post.author}</span>
-                    {post.keyword ? <span className="rounded-md bg-background px-2 py-1 text-[11px] text-muted">{post.keyword}</span> : null}
-                  </div>
-                  <div className="mt-1 line-clamp-2 text-sm text-muted">{post.content}</div>
-                </div>
-                <div className="shrink-0 rounded-md bg-background px-2 py-1 text-sm font-semibold text-accent">{post.opportunityScore}</div>
-              </button>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      <section className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-base font-semibold text-text">{copy.opportunityInbox}</div>
-            <div className="mt-1 text-sm text-muted">{copy.scanOpportunitiesHelp}</div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="primary" icon={<Radar className={cn('size-4', isScanning && 'animate-spin')} />} disabled={isScanning} onClick={onScan}>
-              {isScanning ? copy.scanningOpportunities : copy.scanOpportunities}
-            </Button>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-4 text-base font-semibold text-text">{copy.topOpportunities}</div>
-        {topPosts.length ? (
-          <div className="space-y-2">
-            {topPosts.map((post) => (
-              <button key={post.id} className="flex w-full items-center justify-between gap-4 rounded-md border border-border bg-panelSoft px-3 py-3 text-left transition hover:border-accent/60" onClick={() => onSelectPost(post.id)}>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate text-sm font-semibold text-text">{post.author}</span>
-                    <OpportunityVerdict analysis={analyses[post.id]} copy={copy} />
-                    {post.engagementGrowthPercent > 0 ? <span className="inline-flex items-center gap-1 text-xs text-emerald-300"><TrendingUp className="size-3.5" />+{post.engagementGrowthPercent}%</span> : null}
-                  </div>
-                  <div className="mt-1 line-clamp-2 text-sm text-muted">{post.content}</div>
-                  {analyses[post.id]?.affiliateProducts[0] ? <div className="mt-2 text-xs text-sky-200">{analyses[post.id].affiliateProducts[0]}</div> : null}
-                </div>
-                <div className="shrink-0 rounded-md bg-background px-2 py-1 text-sm font-semibold text-accent">{post.opportunityScore}</div>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-md border border-border bg-panelSoft p-4 text-sm text-muted">{copy.emptyDashboard}</div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function DashboardMetric({ icon, label, value }: { icon: ReactNode; label: string; value: number }) {
-  return (
-    <div className="rounded-lg border border-border bg-panel p-4">
-      <div className="mb-3 flex items-center gap-2 text-xs text-muted">
-        {icon}
-        {label}
-      </div>
-      <div className="text-2xl font-semibold text-text">{value}</div>
-    </div>
-  );
-}
-
-function OpportunityVerdict({ analysis, copy }: { analysis?: AIAnalysis; copy: TranslationCopy }) {
-  const verdict = analysis?.verdict ?? 'watch';
-  const label = verdict === 'make_now' ? copy.makeNow : verdict === 'skip' ? copy.skip : copy.watch;
-  return (
-    <span className={cn('rounded-md px-2 py-1 text-[11px] font-semibold uppercase', verdict === 'make_now' ? 'bg-success/15 text-emerald-200' : verdict === 'skip' ? 'bg-danger/15 text-rose-200' : 'bg-warning/15 text-amber-200')}>
-      {label}
-      {analysis ? ` · ${analysis.confidenceScore}` : ''}
-    </span>
-  );
-}
-
 function FeedView({
   copy,
+  manualPostUrl,
+  isImportingPost,
   posts,
   selectedPostId,
   analyzingId,
-  copiedId,
+  loadingRepliesId,
   savedIds,
   onAnalyze,
-  onCopy,
   onGenerateTikTokIdea,
   onOpenLink,
+  onImportPost,
+  onManualPostUrl,
   onRepliesSort,
+  onShowReplies,
   onSave,
   onSelect
 }: {
   copy: TranslationCopy;
+  manualPostUrl: string;
+  isImportingPost: boolean;
   posts: ThreadsPost[];
   selectedPostId?: string;
   analyzingId: string | null;
-  copiedId: string | null;
+  loadingRepliesId: string | null;
   savedIds: Set<string>;
   onAnalyze: (post: ThreadsPost) => void;
-  onCopy: (post: ThreadsPost) => void;
   onGenerateTikTokIdea: (post: ThreadsPost) => void;
   onOpenLink: (post: ThreadsPost) => void;
+  onImportPost: () => void;
+  onManualPostUrl: (url: string) => void;
   onRepliesSort: () => void;
+  onShowReplies: (post: ThreadsPost) => void;
   onSave: (post: ThreadsPost) => void;
   onSelect: (id: string) => void;
 }) {
+  const [repliesOnly, setRepliesOnly] = useState(false);
+  const [growingOnly, setGrowingOnly] = useState(false);
+  const [videoPotentialOnly, setVideoPotentialOnly] = useState(false);
+  const filteredPosts = posts.filter((post) => (!repliesOnly || post.replies >= 10) && (!growingOnly || post.trendState === 'EMERGING' || post.trendState === 'GROWING') && (!videoPotentialOnly || post.videoPotentialScore >= 70));
   return (
     <>
+      <section className="mb-4 rounded-lg border border-border bg-panel p-4">
+        <div className="mb-3">
+          <div className="text-sm font-semibold text-text">{copy.manualImportTitle}</div>
+          <div className="mt-1 text-xs leading-5 text-muted">{copy.manualImportHelp}</div>
+        </div>
+        <div className="flex gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Link2 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
+            <Input
+              value={manualPostUrl}
+              onChange={(event) => onManualPostUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') onImportPost();
+              }}
+              className="pl-9"
+              placeholder={copy.manualImportPlaceholder}
+            />
+          </div>
+          <Button variant="primary" icon={<Sparkles className={cn('size-4', isImportingPost && 'animate-pulse')} />} disabled={!manualPostUrl.trim() || isImportingPost} onClick={onImportPost}>
+            {isImportingPost ? copy.manualImporting : copy.manualImport}
+          </Button>
+        </div>
+      </section>
+      <div className="mb-4 rounded-md border border-border bg-panel px-3 py-2 text-sm text-muted">{copy.feedResearch}</div>
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm text-muted">
           <Filter className="size-4" />
           <span>
-            {posts.length} {copy.postsSorted}
+            {filteredPosts.length} {copy.postsSorted}
           </span>
         </div>
         <Button icon={<SlidersHorizontal className="size-4" />} onClick={onRepliesSort}>
           {copy.replies}
         </Button>
       </div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <FilterToggle active={repliesOnly} label="Replies ≥ 10" onClick={() => setRepliesOnly(!repliesOnly)} />
+        <FilterToggle active={growingOnly} label="Trend: Emerging / Growing" onClick={() => setGrowingOnly(!growingOnly)} />
+        <FilterToggle active={videoPotentialOnly} label="Video Potential ≥ 70" onClick={() => setVideoPotentialOnly(!videoPotentialOnly)} />
+      </div>
 
       <div className="space-y-4">
-        {posts.map((post) => (
+        {filteredPosts.map((post) => (
           <FeedCard
             key={post.id}
             post={post}
             active={post.id === selectedPostId}
             analyzing={post.id === analyzingId}
-            copied={post.id === copiedId}
+            loadingReplies={post.id === loadingRepliesId}
             saved={savedIds.has(post.id)}
             copy={copy}
             onAnalyze={() => onAnalyze(post)}
-            onCopy={() => onCopy(post)}
             onGenerateTikTokIdea={() => onGenerateTikTokIdea(post)}
             onOpenLink={() => onOpenLink(post)}
+            onShowReplies={() => onShowReplies(post)}
             onSave={() => onSave(post)}
             onSelect={() => onSelect(post.id)}
           />
         ))}
-        {!posts.length ? <div className="rounded-lg border border-border bg-panel p-6 text-sm text-muted">{copy.noMatchingPosts}</div> : null}
+        {!filteredPosts.length ? <div className="rounded-lg border border-border bg-panel p-6 text-sm text-muted">{copy.noMatchingPosts}</div> : null}
       </div>
     </>
   );
 }
 
-function KeywordsView({
-  copy,
-  keywords,
-  newKeyword,
-  onAddKeyword,
-  onExport,
-  onFetchKeyword,
-  onNewKeyword,
-  onToggleKeyword,
-  onUpdateKeyword,
-  onDeleteKeyword
-}: {
-  copy: TranslationCopy;
-  keywords: Keyword[];
-  newKeyword: string;
-  onAddKeyword: () => void;
-  onExport: () => void;
-  onFetchKeyword: (phrase: string) => void;
-  onNewKeyword: (value: string) => void;
-  onToggleKeyword: (keyword: Keyword) => void;
-  onUpdateKeyword: (id: string, phrase: string) => void;
-  onDeleteKeyword: (id: string) => void;
-}) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingPhrase, setEditingPhrase] = useState('');
-
-  return (
-    <div className="max-w-4xl space-y-4">
-      <div className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-2 text-base font-semibold text-text">{copy.keywordManager}</div>
-        <div className="mb-4 text-sm leading-6 text-muted">{copy.keywordManagerHelp}</div>
-        <div className="mb-4 flex max-w-xl gap-2">
-          <Input value={newKeyword} onChange={(event) => onNewKeyword(event.target.value)} onKeyDown={(event) => {
-            if (event.key === 'Enter') onAddKeyword();
-          }} placeholder={copy.addNiche} />
-          <Button aria-label="Add keyword" icon={<Plus className="size-4" />} onClick={onAddKeyword} />
-        </div>
-
-        <div className="space-y-2">
-          {keywords.map((keyword) => (
-            <div key={keyword.id} className="grid grid-cols-[minmax(0,1fr)_100px_86px_72px_72px] items-center gap-3 rounded-md border border-border bg-panelSoft px-3 py-3">
-              {editingId === keyword.id ? (
-                <Input value={editingPhrase} onChange={(event) => setEditingPhrase(event.target.value)} onKeyDown={(event) => {
-                  if (event.key === 'Enter' && editingPhrase.trim()) {
-                    onUpdateKeyword(keyword.id, editingPhrase);
-                    setEditingId(null);
-                  }
-                  if (event.key === 'Escape') setEditingId(null);
-                }} />
-              ) : (
-                <button className="truncate text-left text-sm font-medium text-text" onClick={() => onFetchKeyword(keyword.phrase)}>
-                  {keyword.phrase}
-                </button>
-              )}
-              <div className={cn('text-xs font-medium', keyword.enabled ? 'text-emerald-300' : 'text-muted')}>{keyword.enabled ? copy.enabled : copy.disabled}</div>
-              <Button className="h-8" onClick={() => onFetchKeyword(keyword.phrase)}>
-                {copy.fetch}
-              </Button>
-              <div className="flex gap-1">
-                {editingId === keyword.id ? (
-                  <>
-                    <Button aria-label={copy.saveChanges} title={copy.saveChanges} className="h-8 px-2" icon={<Check className="size-4" />} disabled={!editingPhrase.trim()} onClick={() => {
-                      onUpdateKeyword(keyword.id, editingPhrase);
-                      setEditingId(null);
-                    }} />
-                    <Button aria-label={copy.cancel} title={copy.cancel} className="h-8 px-2" icon={<X className="size-4" />} onClick={() => setEditingId(null)} />
-                  </>
-                ) : (
-                  <>
-                    <Button aria-label={copy.editKeyword} title={copy.editKeyword} className="h-8 px-2" icon={<Pencil className="size-4" />} onClick={() => {
-                      setEditingId(keyword.id);
-                      setEditingPhrase(keyword.phrase);
-                    }} />
-                    <Button aria-label={copy.deleteKeyword} title={copy.deleteKeyword} className="h-8 px-2" icon={<Trash2 className="size-4" />} onClick={() => {
-                      if (window.confirm(copy.confirmDeleteKeyword)) onDeleteKeyword(keyword.id);
-                    }} />
-                  </>
-                )}
-              </div>
-              <button aria-label={`${keyword.enabled ? 'Disable' : 'Enable'} ${keyword.phrase}`} onClick={() => onToggleKeyword(keyword)} className={cn('h-5 w-9 justify-self-end rounded-full p-0.5 transition', keyword.enabled ? 'bg-success' : 'bg-border')}>
-                <span className={cn('block size-4 rounded-full bg-white transition', keyword.enabled ? 'translate-x-4' : 'translate-x-0')} />
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <Button icon={<Download className="size-4" />} onClick={onExport}>
-        {copy.export}
-      </Button>
-    </div>
-  );
-}
-
-function KeywordPanel({
-  keywords,
-  newKeyword,
-  onNewKeyword,
-  onAddKeyword,
-  onToggleKeyword,
-  onRunKeyword,
-  onExport,
-  copy
-}: {
-  keywords: Keyword[];
-  newKeyword: string;
-  onNewKeyword: (value: string) => void;
-  onAddKeyword: () => void;
-  onToggleKeyword: (keyword: Keyword) => void;
-  onRunKeyword: (phrase: string) => void;
-  onExport: () => void;
-  copy: TranslationCopy;
-}) {
-  return (
-    <div className="space-y-4">
-      <div className="rounded-lg border border-border bg-panel p-4">
-        <div className="mb-3 text-sm font-semibold text-text">{copy.keywordMonitoring}</div>
-        <div className="mb-3 text-xs leading-5 text-muted">{copy.keywordMonitoringHelp}</div>
-        <div className="mb-3 flex gap-2">
-          <Input value={newKeyword} onChange={(event) => onNewKeyword(event.target.value)} placeholder={copy.addNiche} />
-          <Button aria-label="Add keyword" icon={<Plus className="size-4" />} onClick={onAddKeyword} />
-        </div>
-        <div className="space-y-2">
-          {keywords.map((keyword) => (
-            <div key={keyword.id} className="flex items-center justify-between gap-2 rounded-md border border-border bg-panelSoft px-3 py-2">
-              <button className="min-w-0 flex-1 truncate text-left text-sm text-text" onClick={() => onRunKeyword(keyword.phrase)}>
-                {keyword.phrase}
-              </button>
-              <button
-                aria-label={`${keyword.enabled ? 'Disable' : 'Enable'} ${keyword.phrase}`}
-                onClick={() => onToggleKeyword(keyword)}
-                className={cn('h-5 w-9 rounded-full p-0.5 transition', keyword.enabled ? 'bg-success' : 'bg-border')}
-              >
-                <span className={cn('block size-4 rounded-full bg-white transition', keyword.enabled ? 'translate-x-4' : 'translate-x-0')} />
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2">
-        <Button icon={<Download className="size-4" />} onClick={onExport}>
-          {copy.export}
-        </Button>
-      </div>
-    </div>
-  );
+function FilterToggle({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return <button className={cn('rounded-md border px-3 py-2 text-xs transition', active ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-panel text-muted hover:text-text')} onClick={onClick}>{label}</button>;
 }
 
 function SettingsView({
@@ -870,29 +796,24 @@ function SettingsView({
   onSave,
   onSaveOpenAI,
   onLoginThreads,
-  onCheckThreads
+  onCheckThreads,
+  onOpenBilling
 }: {
   settings: AppSettings | null;
   copy: TranslationCopy;
-  onSave: (settings: { openAiApiKey?: string; openAiModel?: string; elevenLabsApiKey?: string; elevenLabsVoiceId?: string; language?: Language; allowDemoMode?: boolean; autoScanEnabled?: boolean; autoScanMinutes?: number; scanOnLaunch?: boolean }) => Promise<AppSettings | null>;
+  onSave: (settings: UpdateSettingsRequest) => Promise<AppSettings | null>;
   onSaveOpenAI: (settings: { openAiApiKey?: string; openAiModel?: string }) => Promise<void>;
   onLoginThreads: () => void;
   onCheckThreads: () => void;
+  onOpenBilling: () => void;
 }) {
   const [apiKey, setApiKey] = useState('');
-  const [elevenLabsApiKey, setElevenLabsApiKey] = useState('');
-  const [voiceId, setVoiceId] = useState(settings?.elevenLabsVoiceId ?? 'pNInz6obpgDQGcFmaJgB');
   const [model, setModel] = useState(settings?.openAiModel ?? recommendedOpenAIModel);
   const [saving, setSaving] = useState(false);
-  const selectedModel = openAIModelOptions.find((option) => option.id === model) ?? openAIModelOptions[0];
 
   useEffect(() => {
     if (settings?.openAiModel) setModel(settings.openAiModel);
   }, [settings?.openAiModel]);
-
-  useEffect(() => {
-    if (settings?.elevenLabsVoiceId) setVoiceId(settings.elevenLabsVoiceId);
-  }, [settings?.elevenLabsVoiceId]);
 
   return (
     <div className="max-w-3xl space-y-4">
@@ -908,26 +829,7 @@ function SettingsView({
           <div className="text-xs text-muted">
             {settings?.openAiApiKeySet ? `${copy.apiKeySaved}: ${settings.maskedOpenAiApiKey ?? 'sk-••••••••'}. ${copy.apiKeyHelpSaved}` : copy.apiKeyHelpEmpty}
           </div>
-          <select
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-[#0f1217] px-3 text-sm text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-          >
-            {openAIModelOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label} - {formatModelPrice(option)}
-              </option>
-            ))}
-          </select>
-          <div className="rounded-md border border-border bg-panelSoft p-3">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-text">{selectedModel.label}</span>
-              {selectedModel.badge ? <span className="rounded-md bg-success/15 px-2 py-1 text-xs font-medium text-emerald-200">{selectedModel.badge}</span> : null}
-            </div>
-            <div className="text-sm leading-5 text-muted">{selectedModel.description}</div>
-            <div className="mt-2 text-xs text-slate-300">{formatModelPrice(selectedModel)}</div>
-            <div className="mt-1 text-xs text-muted">{selectedModel.recommendedFor}</div>
-          </div>
+          <ModelSelect value={model} onChange={setModel} />
           <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"
@@ -941,40 +843,10 @@ function SettingsView({
             >
               {saving ? copy.saving : copy.save}
             </Button>
+            <Button icon={<ExternalLink className="size-4" />} onClick={onOpenBilling}>
+              {copy.openAiBillingDashboard}
+            </Button>
           </div>
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-1 text-base font-semibold text-text">{copy.elevenLabs}</div>
-        <div className="mb-4 text-sm text-muted">{copy.adamVoice}</div>
-        <div className="grid gap-3">
-          <Input
-            type="password"
-            value={elevenLabsApiKey}
-            onChange={(event) => setElevenLabsApiKey(event.target.value)}
-            placeholder={settings?.elevenLabsApiKeySet ? settings.maskedElevenLabsApiKey ?? copy.apiKeySaved : copy.elevenLabsApiKeyPlaceholder}
-          />
-          <div className="text-xs text-muted">
-            {settings?.elevenLabsApiKeySet ? `${copy.apiKeySaved}: ${settings.maskedElevenLabsApiKey ?? '••••••••'}. ${copy.elevenLabsApiKeyHelpSaved}` : copy.elevenLabsApiKeyHelpEmpty}
-          </div>
-          <label className="grid gap-2 text-xs text-muted">
-            {copy.voiceId}
-            <Input value={voiceId} onChange={(event) => setVoiceId(event.target.value)} />
-          </label>
-          <Button
-            className="w-fit"
-            variant="primary"
-            disabled={saving}
-            onClick={async () => {
-              setSaving(true);
-              await onSave({ elevenLabsApiKey, elevenLabsVoiceId: voiceId });
-              setElevenLabsApiKey('');
-              setSaving(false);
-            }}
-          >
-            {saving ? copy.saving : copy.save}
-          </Button>
         </div>
       </div>
 
@@ -1047,17 +919,81 @@ function SettingsView({
         </div>
       </div>
 
-      <div className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-4 text-base font-semibold text-text">{copy.demoMode}</div>
-        <button
-          onClick={() => onSave({ allowDemoMode: !settings?.allowDemoMode })}
-          className={cn('h-5 w-9 rounded-full p-0.5 transition', settings?.allowDemoMode ? 'bg-success' : 'bg-border')}
-        >
-          <span className={cn('block size-4 rounded-full bg-white transition', settings?.allowDemoMode ? 'translate-x-4' : 'translate-x-0')} />
-        </button>
-      </div>
     </div>
   );
+}
+
+function ModelSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const selected = openAIModelOptions.find((option) => option.id === value) ?? openAIModelOptions[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="flex h-10 w-full items-center justify-between gap-3 rounded-md border border-border bg-[#0f1217] px-3 text-left text-sm text-text outline-none transition hover:border-accent/70 focus:border-accent focus:ring-2 focus:ring-accent/20"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="truncate">{selected.label} - {formatModelPrice(selected)}</span>
+        <ChevronDown className={cn('size-4 shrink-0 text-muted transition', open && 'rotate-180')} />
+      </button>
+      {open ? (
+        <div role="listbox" className="absolute inset-x-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-md border border-border bg-[#0f1217] p-1 shadow-2xl">
+          {openAIModelOptions.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              role="option"
+              aria-selected={option.id === value}
+              className={cn('flex w-full items-center justify-between gap-3 rounded px-2.5 py-2 text-left text-sm transition hover:bg-panelSoft', option.id === value ? 'bg-panelSoft text-text' : 'text-muted')}
+              onClick={() => {
+                onChange(option.id);
+                setOpen(false);
+              }}
+            >
+              <span className="min-w-0 truncate">{option.label} - {formatModelPrice(option)}</span>
+              {option.badge ? <span className="inline-flex h-5 shrink-0 items-center rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 text-[11px] font-medium text-emerald-200">🔥 Recommended</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AssetLibraryView({ assets, onAdd, onDelete, onPreview }: { assets: AssetLibraryItem[]; onAdd: (type: AssetType) => void; onDelete: (id: string) => void; onPreview: (id: string) => void }) {
+  const [type, setType] = useState<AssetType>('background');
+  const visible = assets.filter((asset) => asset.type === type);
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div><h2 className="text-lg font-semibold text-text">Kho clip</h2><p className="mt-1 text-sm text-muted">Lưu clip nền retention và clip demo sản phẩm để tái sử dụng khi tạo video nháp.</p></div>
+        <Button variant="primary" icon={<Upload className="size-4" />} onClick={() => onAdd(type)}>Thêm clip</Button>
+      </div>
+      <div className="flex gap-2"><FilterToggle active={type === 'background'} label="Background" onClick={() => setType('background')} /><FilterToggle active={type === 'product'} label="Product" onClick={() => setType('product')} /></div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6">
+        {visible.map((asset) => <div key={asset.id} className="overflow-hidden rounded-lg border border-border bg-panel"><button className="group relative block aspect-video w-full overflow-hidden bg-background" title={`Preview ${asset.label}`} onClick={() => onPreview(asset.id)}>{asset.thumbnailDataUrl ? <img src={asset.thumbnailDataUrl} alt="" className="size-full object-cover transition duration-200 group-hover:scale-105" /> : <div className="grid size-full place-items-center text-[11px] text-muted">Chưa có thumbnail</div>}<span className="absolute inset-0 grid place-items-center bg-black/0 transition group-hover:bg-black/35"><Play className="size-6 fill-white text-white opacity-0 transition group-hover:opacity-100" /></span></button><div className="p-2.5"><div className="truncate text-xs font-semibold text-text" title={asset.label}>{asset.label}</div><div className="mt-1.5 text-[11px] text-muted">{asset.durationSecs.toFixed(1)}s · đã dùng {asset.timesUsed} lần</div><div className="mt-2 flex justify-end gap-1.5"><Button className="h-8 px-2" title="Preview clip" icon={<Play className="size-3.5" />} onClick={() => onPreview(asset.id)} /><Button className="h-8 px-2" title="Xóa clip khỏi Kho clip" icon={<Trash2 className="size-3.5" />} onClick={() => onDelete(asset.id)} /></div></div></div>)}
+      </div>
+      {!visible.length ? <div className="rounded-lg border border-border bg-panel p-6 text-sm text-muted">Chưa có clip trong nhóm này. Bạn vẫn có thể chọn file MP4 trực tiếp khi tạo video.</div> : null}
+    </div>
+  );
+}
+
+function RepliesDrawer({ post, loading, onClose, onReload }: { post: ThreadsPost; loading: boolean; onClose: () => void; onReload: () => void }) {
+  const replies = filterUsefulReplies(post.topReplies);
+  return <aside className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-x-hidden overflow-y-auto border-l border-border bg-[#0c0f13] p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between gap-3"><div className="min-w-0"><div className="text-xs uppercase tracking-[0.14em] text-muted">Top replies ({replies.length})</div><div className="mt-1 truncate text-base font-semibold text-text">{post.author}</div></div><Button className="shrink-0 px-2" icon={<X className="size-4" />} onClick={onClose} /></div><div className="mb-4"><Button disabled={loading} icon={<RefreshCcw className={cn('size-4', loading && 'animate-spin')} />} onClick={onReload}>{loading ? 'Đang tải replies...' : 'Tải lại replies'}</Button></div><div className="space-y-3">{replies.map((reply) => <div key={reply.id} className="min-w-0 overflow-hidden rounded-lg border border-border bg-panel p-3"><div className="break-all text-xs font-semibold text-sky-200">@{reply.author}</div><div className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300 [overflow-wrap:anywhere]">{reply.content}</div><div className="mt-2 text-xs text-muted">{reply.likes} likes</div></div>)}{!replies.length ? <div className="text-sm text-muted">Chưa tải được nội dung replies cho bài này.</div> : null}</div></aside>;
 }
 
 function mergePosts(incoming: ThreadsPost[], current: ThreadsPost[]) {
@@ -1078,11 +1014,25 @@ function titleForView(view: string, copy: TranslationCopy) {
       return copy.keywords;
     case 'saved':
       return copy.savedPosts;
-    case 'products':
-      return copy.productSuggestions;
+    case 'assets':
+      return 'Kho clip';
+    case 'uploads':
+      return copy.results;
     case 'settings':
       return copy.settings;
     default:
       return copy.appName;
   }
+}
+
+function sectionLabelForView(view: string) {
+  return {
+    home: 'Smart Inbox',
+    trending: 'Research',
+    keywords: 'Sources',
+    saved: 'Library',
+    assets: 'Assets',
+    uploads: 'Performance',
+    settings: 'Settings'
+  }[view] ?? 'Trend Finder';
 }

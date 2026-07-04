@@ -8,4 +8,7 @@ data/threads-session.json
 data/threads-browser-profile/
 .env
 *.log
-video/
+/video/
+data/video-exports/
+data/video-resources/
+data/video-thumbnails/

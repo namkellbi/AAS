@@ -1,4 +1,4 @@
-import type { AffiliateFitBreakdown, ThreadsPost, ViralScoreBreakdown } from '@/lib/types';
+import type { AffiliateFitBreakdown, ThreadsPost, TrendState, ViralScoreBreakdown } from '@/lib/types';
 import { clamp } from '@/lib/utils';
 
 const emotionalTerms = [
@@ -24,7 +24,8 @@ const painPointTerms = [
 
 const productSolvabilityTerms = [
   'fix', 'solution', 'use', 'wear', 'apply', 'attach', 'holder', 'hook', 'pad', 'accessory', 'tool',
-  'cach', 'meo', 'giu', 'chong', 'gan', 'cai', 'mieng', 'moc', 'day', 'kem', 'may', 'phu kien', 'silicone', 'dung cu', 'bo gai', 'loai nay'
+  'cach', 'meo', 'giu', 'chong', 'gan', 'cai', 'mieng', 'moc', 'day', 'kem', 'may', 'phu kien', 'silicone', 'dung cu', 'bo gai', 'loai nay',
+  'mua', 'brand', 'hang nao', 'loai nao', 'vest', 'blazer', 'ao', 'quan', 'kinh', 'serum', 'sua rua mat', 'kem chong nang'
 ];
 
 const demoTerms = [
@@ -57,6 +58,7 @@ export function scorePost(post: ScorablePost): {
   affiliateFitScore: number;
   opportunityScore: number;
   velocityScore: number;
+  videoPotentialScore: number;
   engagementGrowthPercent: number;
   emotionalCategory: string;
   breakdown: ViralScoreBreakdown;
@@ -66,6 +68,8 @@ export function scorePost(post: ScorablePost): {
   const engagement = post.likes + post.replies * 3 + post.reposts * 4;
   const perHour = engagement / ageHours;
   const text = normalizeText(post.content);
+  const repliesText = normalizeText(post.topReplies.map((reply) => reply.content).join(' '));
+  const combinedText = `${text} ${repliesText}`;
 
   const breakdown: ViralScoreBreakdown = {
     likesVelocity: clamp(Math.log10(perHour + 1) * 18, 0, 25),
@@ -77,26 +81,51 @@ export function scorePost(post: ScorablePost): {
   };
 
   const score = Math.round(clamp(Object.values(breakdown).reduce((total, value) => total + value, 0), 0, 100));
+  const ageBonus = ageHours < 24 ? 10 : 0;
+  const topReplyBonus = post.topReplies.some((reply) => reply.likes >= 50) ? 15 : 0;
   const affiliateBreakdown: AffiliateFitBreakdown = {
-    painPointClarity: keywordScore(text, painPointTerms, 30, 3),
-    productSolvability: keywordScore(text, productSolvabilityTerms, 25, 3),
-    demoPotential: keywordScore(text, demoTerms, 20, 3),
-    audienceClarity: keywordScore(text, audienceTerms, 15, 2),
-    buyingIntent: keywordScore(text, buyingIntentTerms, 10, 2)
+    painPointClarity: keywordScore(text, painPointTerms, 25, 2),
+    productSolvability: keywordScore(combinedText, productSolvabilityTerms, 25, 2),
+    demoPotential: keywordScore(combinedText, demoTerms, 20, 2),
+    audienceClarity: post.replies >= 10 ? 20 : keywordScore(text, audienceTerms, 20, 2),
+    buyingIntent: keywordScore(combinedText, buyingIntentTerms, 5, 1)
   };
-  const affiliateFitScore = Math.round(clamp(Object.values(affiliateBreakdown).reduce((total, value) => total + value, 0), 0, 100));
-  const opportunityScore = Math.round(score * 0.25 + affiliateFitScore * 0.75);
+  const excluded = isExcludedPost(text, affiliateBreakdown);
+  const affiliateFitScore = excluded
+    ? 0
+    : Math.round(clamp(affiliateBreakdown.painPointClarity + affiliateBreakdown.productSolvability + (post.replies >= 10 ? 20 : 0) + topReplyBonus + ageBonus + affiliateBreakdown.buyingIntent, 0, 100));
+  const videoPotentialScore = Math.round(clamp(
+    keywordScore(combinedText, demoTerms, 35, 2) +
+      keywordScore(combinedText, emotionalTerms, 25, 2) +
+      keywordScore(combinedText, controversialTerms, 15, 2) +
+      keywordScore(combinedText, painPointTerms, 25, 2),
+    0,
+    100
+  ));
+  const velocityScore = trendVelocityScore(post.trendState);
+  const opportunityScore = Math.round(affiliateFitScore * 0.4 + videoPotentialScore * 0.3 + velocityScore * 0.2 + score * 0.1);
 
   return {
     score,
     affiliateFitScore,
     opportunityScore,
-    velocityScore: 0,
+    velocityScore,
+    videoPotentialScore,
     engagementGrowthPercent: 0,
     emotionalCategory: detectEmotionalCategory(text),
     breakdown,
     affiliateBreakdown
   };
+}
+
+export function trendVelocityScore(state: TrendState) {
+  return { EMERGING: 90, GROWING: 75, PEAK: 50, DECLINING: 20, DEAD: 0 }[state];
+}
+
+function isExcludedPost(text: string, affiliateBreakdown: AffiliateFitBreakdown) {
+  const excludedTerms = ['chinh tri', 'bau cu', 'dich vu te', 'shipper', 'tong dai', 'quang cao', 'booking', 'pr package', 'sponsored'];
+  const excluded = excludedTerms.some((term) => text.includes(term));
+  return excluded || (affiliateBreakdown.painPointClarity === 0 && affiliateBreakdown.buyingIntent === 0) || affiliateBreakdown.productSolvability === 0;
 }
 
 export function detectEmotionalCategory(text: string) {

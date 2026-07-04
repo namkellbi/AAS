@@ -2,11 +2,12 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { Bookmark, Clipboard, ExternalLink, Lightbulb, MessageCircle, Repeat2, Sparkles, ThumbsUp, TrendingUp } from 'lucide-react';
+import { Bookmark, ExternalLink, Eye, Lightbulb, MessageCircle, Repeat2, Sparkles, ThumbsUp, TrendingUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScoreRing } from '@/components/ui/score-ring';
 import type { TranslationCopy } from '@/lib/i18n';
+import { filterUsefulReplies } from '@/lib/replies';
 import type { ThreadsPost } from '@/lib/types';
 import { cn, compactNumber } from '@/lib/utils';
 
@@ -14,30 +15,31 @@ export function FeedCard({
   post,
   active,
   analyzing,
-  copied,
+  loadingReplies,
   saved,
   onSelect,
   onAnalyze,
   onSave,
-  onCopy,
   onGenerateTikTokIdea,
   onOpenLink,
+  onShowReplies,
   copy
 }: {
   post: ThreadsPost;
   active: boolean;
   analyzing: boolean;
-  copied: boolean;
+  loadingReplies: boolean;
   saved: boolean;
   onSelect: () => void;
   onAnalyze: () => void;
   onSave: () => void;
-  onCopy: () => void;
   onGenerateTikTokIdea: () => void;
   onOpenLink: () => void;
+  onShowReplies: () => void;
   copy: TranslationCopy;
 }) {
   const hasPermalink = /^https:\/\/(www\.)?threads\.(com|net)\/@[A-Za-z0-9._]+\/post\/[A-Za-z0-9_-]+/.test(post.url);
+  const usefulReplyCount = filterUsefulReplies(post.topReplies).length;
 
   return (
     <article
@@ -57,13 +59,10 @@ export function FeedCard({
             <Badge>{post.emotionalCategory}</Badge>
             {post.keyword ? <Badge>{post.keyword}</Badge> : null}
             {post.engagementGrowthPercent > 0 ? <Badge className="text-emerald-200"><TrendingUp className="mr-1 size-3" />+{post.engagementGrowthPercent}%</Badge> : null}
+            <Badge className={trendBadgeClass(post.trendState)}>{trendBadgeLabel(post.trendState)}</Badge>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          <div className="text-right text-[11px] leading-5 text-muted">
-            <div>{copy.viralScore} <span className="font-semibold text-text">{post.trendingScore}</span></div>
-            <div>{copy.affiliateFit} <span className="font-semibold text-text">{post.affiliateFitScore}</span></div>
-          </div>
           <ScoreRing value={post.opportunityScore} label={copy.opportunityScore} />
         </div>
       </div>
@@ -116,15 +115,6 @@ export function FeedCard({
           {saved ? copy.saved : copy.savePost}
         </Button>
         <Button
-          icon={<Clipboard className="size-4" />}
-          onClick={(event) => {
-            event.stopPropagation();
-            onCopy();
-          }}
-        >
-          {copied ? copy.copied : copy.copyContent}
-        </Button>
-        <Button
           icon={<Lightbulb className="size-4" />}
           disabled={analyzing}
           onClick={(event) => {
@@ -145,7 +135,26 @@ export function FeedCard({
         >
           {copy.openLink}
         </Button>
+        <Button
+          icon={<Eye className="size-4" />}
+          disabled={loadingReplies || post.replies === 0}
+          title={usefulReplyCount ? 'Xem top replies đã tải' : 'Tải top replies để dùng cho video'}
+          onClick={(event) => {
+            event.stopPropagation();
+            onShowReplies();
+          }}
+        >
+          {loadingReplies ? 'Đang tải replies...' : usefulReplyCount ? `Xem replies (${usefulReplyCount})` : 'Tải replies'}
+        </Button>
       </div>
     </article>
   );
+}
+
+function trendBadgeLabel(state: ThreadsPost['trendState']) {
+  return { EMERGING: '🔥 Emerging', GROWING: '🚀 Growing', PEAK: '👑 Peak', DECLINING: '📉 Declining', DEAD: 'Dead' }[state];
+}
+
+function trendBadgeClass(state: ThreadsPost['trendState']) {
+  return state === 'EMERGING' || state === 'GROWING' ? 'text-emerald-200' : state === 'PEAK' ? 'text-amber-200' : 'text-muted';
 }

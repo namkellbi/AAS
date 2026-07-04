@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright';
-import type { FetchRequest, ThreadsPost } from '@/lib/types';
+import { filterUsefulReplies } from '@/lib/replies';
+import type { FetchRequest, ThreadsPost, ThreadsReply, TrendState } from '@/lib/types';
 import { nowIso } from '@/lib/utils';
 import { getConfig } from '@/server/config';
 import { scorePost } from '@/server/scoring/trendingScore';
 
-type RawPost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory'>;
+type RawPost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory' | 'topReplies' | 'trendState' | 'likesPerHour' | 'repliesPerHour' | 'videoPotentialScore'>;
 
 export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsPost[]> {
   const config = getConfig();
@@ -26,7 +27,40 @@ export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsP
 
     const posts = await collectPosts(page, request, Math.min(request.maxPosts ?? config.scraperMaxPosts, config.scraperMaxPosts));
     await context.storageState({ path: config.threadsStorageState });
-    return posts;
+    return await attachTopReplies(page, posts);
+  } finally {
+    await context.close();
+  }
+}
+
+export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPost> {
+  const config = getConfig();
+  const normalizedUrl = normalizeThreadsPostUrl(postUrl);
+  const postId = normalizedUrl.split('/post/')[1];
+  fs.mkdirSync(path.dirname(config.threadsStorageState), { recursive: true });
+  fs.mkdirSync(config.threadsProfileDir, { recursive: true });
+
+  const context = await createThreadsContext(true);
+
+  try {
+    const page = await context.newPage();
+    await page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await acceptNonBlockingDialogs(page);
+    if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login before importing a post.');
+    await page.waitForTimeout(config.scraperMinDelayMs);
+    await page.locator(`a[href*="/post/${postId}"]`).first().waitFor({ state: 'attached', timeout: 5000 }).catch(() => undefined);
+    await page.waitForTimeout(1200);
+
+    const request: FetchRequest = { mode: 'manual', query: normalizedUrl, maxPosts: 1 };
+    const rawPosts = await extractVisiblePosts(page, request);
+    const rawPost = rawPosts.find((post) => isSameThreadsPostUrl(post.url, normalizedUrl) || post.id === postId) ?? await extractPermalinkPost(page, normalizedUrl);
+    if (!rawPost || !isUsablePost(rawPost)) {
+      throw new Error('Could not read this Threads post. Confirm that the link is a public Threads post permalink and try again.');
+    }
+
+    const topReplies = filterUsefulReplies(await fetchTopReplies(page, normalizedUrl).catch(() => []));
+    await context.storageState({ path: config.threadsStorageState });
+    return scoreRawPost({ ...rawPost, id: postId, url: normalizedUrl, source: 'manual', keyword: undefined }, topReplies);
   } finally {
     await context.close();
   }
@@ -162,6 +196,8 @@ function urlForRequest(request: FetchRequest) {
       return `https://www.threads.com/@${encodeURIComponent((query ?? '').replace(/^@/, ''))}`;
     case 'trending':
       return 'https://www.threads.com/search?q=people%20with%20always%20struggle';
+    case 'manual':
+      return normalizeThreadsPostUrl(query ?? '');
     case 'home':
     default:
       return 'https://www.threads.com/';
@@ -176,16 +212,7 @@ async function collectPosts(page: Page, request: FetchRequest, maxPosts: number)
 
     for (const raw of rawPosts) {
       if (!isUsablePost(raw) || !matchesRequestedKeyword(raw, request) || collected.has(raw.id)) continue;
-      const scored = scorePost(raw);
-      collected.set(raw.id, {
-        ...raw,
-        trendingScore: scored.score,
-        affiliateFitScore: scored.affiliateFitScore,
-        opportunityScore: scored.opportunityScore,
-        velocityScore: scored.velocityScore,
-        engagementGrowthPercent: scored.engagementGrowthPercent,
-        emotionalCategory: scored.emotionalCategory
-      });
+      collected.set(raw.id, scoreRawPost(raw));
       if (collected.size >= maxPosts) break;
     }
 
@@ -194,6 +221,165 @@ async function collectPosts(page: Page, request: FetchRequest, maxPosts: number)
   }
 
   return Array.from(collected.values()).sort((a, b) => b.opportunityScore - a.opportunityScore);
+}
+
+function scoreRawPost(raw: RawPost, topReplies: ThreadsReply[] = []): ThreadsPost {
+  const enrichedRaw = {
+    ...raw,
+    topReplies,
+    trendState: initialTrendState(raw.timestamp),
+    likesPerHour: 0,
+    repliesPerHour: 0,
+    videoPotentialScore: 0
+  };
+  const scored = scorePost(enrichedRaw);
+  return {
+    ...enrichedRaw,
+    trendingScore: scored.score,
+    affiliateFitScore: scored.affiliateFitScore,
+    opportunityScore: scored.opportunityScore,
+    velocityScore: scored.velocityScore,
+    engagementGrowthPercent: scored.engagementGrowthPercent,
+    emotionalCategory: scored.emotionalCategory,
+    videoPotentialScore: scored.videoPotentialScore
+  };
+}
+
+async function attachTopReplies(page: Page, posts: ThreadsPost[]) {
+  const candidates = posts.filter((post) => post.replies >= 10).slice(0, 8);
+  const replyMap = new Map<string, ThreadsReply[]>();
+  for (const post of candidates) {
+    const replies = await fetchTopReplies(page, post.url).catch(() => []);
+    replyMap.set(post.id, replies);
+    await page.waitForTimeout(650);
+  }
+
+  return posts.map((post) => {
+    const refreshed = replyMap.get(post.id);
+    const next = { ...post, topReplies: refreshed?.length ? refreshed : filterUsefulReplies(post.topReplies) };
+    const score = scorePost(next);
+    return { ...next, trendingScore: score.score, affiliateFitScore: score.affiliateFitScore, opportunityScore: score.opportunityScore, velocityScore: score.velocityScore, emotionalCategory: score.emotionalCategory, videoPotentialScore: score.videoPotentialScore };
+  });
+}
+
+async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsReply[]> {
+  await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login first.');
+  await page.waitForTimeout(1400);
+  await page.mouse.wheel(0, 700);
+  await page.waitForTimeout(700);
+  return page.evaluate((rootUrl) => {
+    const rootId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0] ?? '';
+    const anchors = Array.from(document.querySelectorAll('a'))
+      .map((anchor) => anchor as HTMLAnchorElement)
+      .filter((anchor) => /\/@[A-Za-z0-9._]+\/post\/[A-Za-z0-9_-]+/.test(anchor.href));
+    const seen = new Set<string>();
+    const replies: ThreadsReply[] = [];
+
+    for (const anchor of anchors) {
+      const match = anchor.href.match(/\/@([A-Za-z0-9._]+)\/post\/([A-Za-z0-9_-]+)/);
+      if (!match || match[2] === rootId || seen.has(match[2])) continue;
+      let container = anchor.closest('[data-pressable-container="true"]') as HTMLElement | null;
+      if (!container) {
+        let current: HTMLElement | null = anchor;
+        for (let depth = 0; current && depth < 12; depth += 1) {
+          const text = current.innerText?.trim() ?? '';
+          if (text.length >= 20 && text.length <= 1800 && current.querySelector('svg[aria-label="Like"]')) {
+            container = current;
+            break;
+          }
+          current = current.parentElement;
+        }
+      }
+      if (!container) continue;
+      const lines = container.innerText.split('\n').map((line) => line.trim()).filter(Boolean);
+      const timestampIndex = lines.findIndex(isTimestampLine);
+      const contentStart = timestampIndex >= 0 ? timestampIndex + 1 : 1;
+      const translateIndex = lines.findIndex((line, index) => index >= contentStart && /^(translate|dịch)$/i.test(line));
+      const metricStart = lines.findIndex((line, index) => index > contentStart && isMetricLine(line));
+      const contentEnd = translateIndex > contentStart ? translateIndex : metricStart > contentStart ? metricStart : lines.length;
+      const content = lines
+        .slice(contentStart, contentEnd)
+        .filter((line) => !isTimestampLine(line) && !isMetricLine(line) && !/^(more|xem thêm|translate|dịch)$/i.test(line) && line !== match[1])
+        .join(' ')
+        .trim();
+      if (!isUsefulContent(content)) continue;
+      const likeButtonText = container.querySelector('svg[aria-label="Like"]')?.closest('[role="button"]')?.textContent ?? '';
+      const likes = firstCompactNumber(likeButtonText);
+      seen.add(match[2]);
+      replies.push({ id: match[2], author: match[1], content: content.slice(0, 500), likes });
+      if (replies.length >= 10) break;
+    }
+    return replies.sort((a, b) => b.likes - a.likes);
+
+    function compactToNumber(value: string) {
+      const cleaned = value.replace(/\s+/g, '').toUpperCase();
+      if (!/^\d+(?:\.\d+)?[KMB]?$/.test(cleaned)) return -1;
+      const number = Number.parseFloat(cleaned);
+      if (cleaned.endsWith('B')) return Math.round(number * 1_000_000_000);
+      if (cleaned.endsWith('M')) return Math.round(number * 1_000_000);
+      if (cleaned.endsWith('K')) return Math.round(number * 1_000);
+      return Math.round(number);
+    }
+
+    function firstCompactNumber(value: string) {
+      const match = value.match(/\d+(?:\.\d+)?\s*[KMB]?/i);
+      return match ? Math.max(compactToNumber(match[0]), 0) : 0;
+    }
+
+    function isTimestampLine(value: string) {
+      return /^\d+[smhdw]$/i.test(value) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(value);
+    }
+
+    function isMetricLine(value: string) {
+      return /^\d+(?:\.\d+)?\s*[KMB]?$/i.test(value);
+    }
+
+    function isUsefulContent(value: string) {
+      return value.length >= 3 && !isTimestampLine(value) && !isMetricLine(value);
+    }
+  }, postUrl);
+}
+
+export async function scrapeThreadsPostReplies(postUrl: string): Promise<ThreadsReply[]> {
+  const context = await createThreadsContext(true);
+  try {
+    const page = await context.newPage();
+    return await fetchTopReplies(page, postUrl);
+  } finally {
+    await context.close();
+  }
+}
+
+export function normalizeThreadsPostUrl(value: string) {
+  const trimmed = value.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('Paste a valid Threads post link.');
+  }
+
+  if (!/^(?:www\.)?threads\.(?:com|net)$/i.test(parsed.hostname)) {
+    throw new Error('Only Threads post links are supported.');
+  }
+
+  const match = parsed.pathname.match(/^\/(@[A-Za-z0-9._]+\/post\/[A-Za-z0-9_-]+)/);
+  if (!match) throw new Error('Paste a Threads post permalink, for example https://www.threads.com/@account/post/ABC123.');
+  return `https://www.threads.com/${match[1]}`;
+}
+
+function isSameThreadsPostUrl(left: string, right: string) {
+  try {
+    return normalizeThreadsPostUrl(left) === normalizeThreadsPostUrl(right);
+  } catch {
+    return false;
+  }
+}
+
+function initialTrendState(timestamp: string): TrendState {
+  const ageHours = Math.max((Date.now() - new Date(timestamp).getTime()) / 36e5, 0);
+  return ageHours > 72 ? 'DEAD' : 'EMERGING';
 }
 
 function isUsablePost(post: RawPost) {
@@ -283,7 +469,6 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
         for (const anchor of postAnchors) {
           const url = normalizePostUrl(anchor.href);
           if (urls.has(url)) continue;
-          urls.add(url);
 
           const author = url.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1];
           if (!author) continue;
@@ -304,6 +489,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
             .join('\n')
             .trim();
           if (content.length < 4) continue;
+          urls.add(url);
 
           const metricLines = translateIndex > -1 ? lines.slice(translateIndex + 1) : [];
           const metrics = metricLines
@@ -388,8 +574,8 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
       function parseTimestamp(text: string) {
         const absoluteDate = text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/);
         if (absoluteDate) {
-          const month = Number(absoluteDate[1]) - 1;
-          const day = Number(absoluteDate[2]);
+          const day = Number(absoluteDate[1]);
+          const month = Number(absoluteDate[2]) - 1;
           const year = Number(absoluteDate[3]) + (absoluteDate[3].length === 2 ? 2000 : 0);
           return new Date(year, month, day).toISOString();
         }
@@ -519,6 +705,73 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
     },
     { mode: request.mode, query: request.query }
   ) as Promise<RawPost[]>;
+}
+
+async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPost | null> {
+  return page.evaluate((rootUrl) => {
+    const now = new Date().toISOString();
+    const postId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0];
+    const author = rootUrl.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1];
+    if (!postId || !author) return null;
+
+    const candidates = Array.from(document.querySelectorAll<HTMLElement>('[data-pressable-container="true"]'));
+    const container = candidates.find((item) =>
+      Array.from(item.querySelectorAll<HTMLAnchorElement>('a')).some((anchor) => anchor.href.includes(`/post/${postId}`))
+    );
+    if (!container) return null;
+
+    const lines = container.innerText.split('\n').map((line) => line.trim()).filter(Boolean);
+    const dateIndex = lines.findIndex((line) => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line) || /^\d+[smhdw]$/i.test(line));
+    const translateIndex = lines.findIndex((line, index) => index > dateIndex && /^translate$/i.test(line));
+    const contentEnd = translateIndex > dateIndex ? translateIndex : lines.length;
+    const content = lines.slice(Math.max(dateIndex + 1, 0), contentEnd).join('\n').trim();
+    if (content.length < 4) return null;
+
+    const metrics = lines
+      .slice(translateIndex > -1 ? translateIndex + 1 : contentEnd)
+      .filter((line) => /^\d+(?:\.\d+)?[KMB]?$/i.test(line))
+      .map(compactToNumber)
+      .slice(-4);
+
+    return {
+      id: postId,
+      author,
+      authorHandle: `@${author}`,
+      content: content.slice(0, 900),
+      likes: metrics[0] ?? 0,
+      replies: metrics[1] ?? 0,
+      reposts: metrics[2] ?? 0,
+      timestamp: parseTimestamp(lines[dateIndex] ?? ''),
+      imageUrls: Array.from(new Set(Array.from(container.querySelectorAll<HTMLImageElement>('img')).map((image) => image.currentSrc || image.src).filter(Boolean))),
+      url: rootUrl,
+      source: 'manual',
+      fetchedAt: now
+    };
+
+    function compactToNumber(value: string) {
+      const cleaned = value.toUpperCase();
+      const number = Number.parseFloat(cleaned);
+      if (!Number.isFinite(number)) return 0;
+      if (cleaned.endsWith('B')) return Math.round(number * 1_000_000_000);
+      if (cleaned.endsWith('M')) return Math.round(number * 1_000_000);
+      if (cleaned.endsWith('K')) return Math.round(number * 1_000);
+      return Math.round(number);
+    }
+
+    function parseTimestamp(value: string) {
+      const absoluteDate = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+      if (absoluteDate) {
+        const day = Number(absoluteDate[1]);
+        const month = Number(absoluteDate[2]) - 1;
+        const year = Number(absoluteDate[3]) + (absoluteDate[3].length === 2 ? 2000 : 0);
+        return new Date(year, month, day).toISOString();
+      }
+      const relative = value.match(/^(\d+)([smhdw])$/i);
+      if (!relative) return now;
+      const multipliers: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+      return new Date(Date.now() - Number(relative[1]) * (multipliers[relative[2].toLowerCase()] ?? 0)).toISOString();
+    }
+  }, postUrl);
 }
 
 async function acceptNonBlockingDialogs(page: Page) {
