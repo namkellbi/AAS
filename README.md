@@ -2,9 +2,17 @@
 
 Desktop app for affiliate marketers who research viral Threads posts and turn high-signal ideas into affiliate product angles. It fetches public Threads content with Playwright, stores posts locally in SQLite, scores viral and affiliate potential, and uses OpenAI for Vietnamese-market pain-point and product suggestions.
 
+The project has already reached an end-to-end MVP workflow: Threads discovery, local scoring, AI affiliate analysis, shortlist, TikTok/Reels brief, local video draft, and performance tracking. The main product direction is to evolve this into an affiliate automation tool that can support semi-passive income workflows by reducing manual research, content ideation, draft production, and feedback-loop analysis. It still requires human review, compliant manual publishing, and real product selection; it does not promise guaranteed passive income.
+
 The default Home screen is an AI Opportunity Inbox. Use `Scan Opportunities` to fetch enabled keywords, measure engagement growth, and reduce raw Threads results to a short `Make Now` / `Watch` action list. The Keywords screen starts from Vietnamese audience presets, mines pain-point searches with AI, scores keyword effectiveness, and can expand from strong posts or winning videos. Results records views, clicks, orders, and commission so later analyses can learn from the channel's winners. Optional scheduled scans run only while the local desktop app is open.
 
 This app is research-first. It can render local 9:16 affiliate video drafts for manual review, but it does not auto-post to TikTok/Reels, create fake engagement, or run aggressive scraping.
+
+## Project Documentation
+
+For the detailed Vietnamese project documentation covering purpose, current code behavior, coverage, gaps, expectations, risks, and roadmap, see [`docs/project-documentation.md`](docs/project-documentation.md).
+
+For a copy-ready brief to send another AI for strategic advice on what is still missing before this can become a money-making affiliate video automation engine, see [`docs/ai-advice-brief.md`](docs/ai-advice-brief.md).
 
 ## Stack
 

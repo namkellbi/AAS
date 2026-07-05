@@ -5,12 +5,14 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { TranslationCopy } from '@/lib/i18n';
-import type { AIAnalysis, AssetLibraryItem, ThreadsPost, VideoDraftRequest } from '@/lib/types';
+import type { AIAnalysis, AssetLibraryItem, Product, ThreadsPost, VideoDraftRequest, VideoDraftVariant } from '@/lib/types';
 
 export function TikTokBriefModal({
   analysis,
   assets,
   copy,
+  initialBackgroundPath,
+  matchedProduct,
   post,
   renderProgress,
   renderedVideoPath,
@@ -23,6 +25,8 @@ export function TikTokBriefModal({
   analysis: AIAnalysis;
   assets: AssetLibraryItem[];
   copy: TranslationCopy;
+  initialBackgroundPath?: string;
+  matchedProduct?: Product;
   post: ThreadsPost;
   renderProgress?: { percent: number; message: string } | null;
   renderedVideoPath?: string | null;
@@ -38,8 +42,10 @@ export function TikTokBriefModal({
   const [transitionLine, setTransitionLine] = useState(analysis.videoScript.transitionLine);
   const [solutionText, setSolutionText] = useState(analysis.videoScript.solutionText || analysis.solutionScript);
   const [ctaText, setCtaText] = useState(analysis.videoScript.ctaText || analysis.ctas[0] || '');
-  const [backgroundPath, setBackgroundPath] = useState(assets.find((asset) => asset.type === 'background')?.filePath ?? '');
-  const [productClipPath, setProductClipPath] = useState('');
+  const [backgroundPath, setBackgroundPath] = useState(initialBackgroundPath ?? assets.find((asset) => asset.type === 'background')?.filePath ?? '');
+  const matchedDemoPath = matchedProduct?.demoAssetId ? assets.find((asset) => asset.id === matchedProduct.demoAssetId)?.filePath ?? '' : '';
+  const [productClipPath, setProductClipPath] = useState(matchedDemoPath);
+  const [variants, setVariants] = useState<VideoDraftVariant[]>([]);
   useEffect(() => {
     setReplies(analysis.bestReplies);
     setHookText(analysis.hooks[0] || '');
@@ -48,7 +54,19 @@ export function TikTokBriefModal({
     setSolutionText(analysis.videoScript.solutionText || analysis.solutionScript);
     setCtaText(analysis.videoScript.ctaText || analysis.ctas[0] || '');
   }, [analysis, post.content]);
-  const renderRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, productClipPath: productClipPath || undefined };
+  useEffect(() => {
+    if (initialBackgroundPath) setBackgroundPath(initialBackgroundPath);
+  }, [initialBackgroundPath]);
+  const renderRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, productClipPath: productClipPath || undefined, variants: variants.length ? variants : undefined };
+
+  function addVariant() {
+    if (variants.length >= 2) return;
+    const index = variants.length + 1;
+    setVariants([
+      ...variants,
+      { label: `variant-${index}`, hookText: analysis.hooks[index] ?? '', ctaText: analysis.ctas[index] ?? '' }
+    ]);
+  }
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-5" onMouseDown={onClose}>
       <section
@@ -76,6 +94,18 @@ export function TikTokBriefModal({
               {copy.openLink}
             </Button>
           </BriefSection>
+
+          {matchedProduct ? (
+            <BriefSection icon={<ShoppingBag className="size-4" />} title={copy.matchedProduct}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-text">{matchedProduct.name}</span>
+                <Badge>{matchedProduct.marketplace === 'tiktok_shop' ? 'TikTok Shop' : matchedProduct.marketplace === 'shopee' ? 'Shopee' : 'Other'}</Badge>
+                <Badge>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(matchedProduct.price)}</Badge>
+                <Badge>{matchedProduct.commissionPercent}%</Badge>
+              </div>
+              {matchedProduct.affiliateLink ? <div className="mt-2 truncate text-xs text-sky-200">{matchedProduct.affiliateLink}</div> : null}
+            </BriefSection>
+          ) : null}
 
           <div className="grid gap-4 md:grid-cols-2">
             <BriefSection icon={<Target className="size-4" />} title={copy.emotionalTrigger}>
@@ -144,6 +174,33 @@ export function TikTokBriefModal({
               <label className="grid gap-2 text-xs text-muted">Background clip<select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={backgroundPath} onChange={(event) => setBackgroundPath(event.target.value)}><option value="">Chọn khi render</option>{assets.filter((asset) => asset.type === 'background').map((asset) => <option key={asset.id} value={asset.filePath}>{asset.label}</option>)}</select></label>
               <label className="grid gap-2 text-xs text-muted">Product clip (optional)<select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={productClipPath} onChange={(event) => setProductClipPath(event.target.value)}><option value="">Không dùng product clip</option>{assets.filter((asset) => asset.type === 'product').map((asset) => <option key={asset.id} value={asset.filePath}>{asset.label}</option>)}</select></label>
             </div>
+          </BriefSection>
+
+          <BriefSection icon={<Lightbulb className="size-4" />} title={copy.variantsTitle}>
+            <p className="text-xs text-muted">{copy.variantsHelp}</p>
+            <div className="mt-3 space-y-3">
+              {variants.map((variant, index) => (
+                <div key={index} className="rounded-md border border-border bg-panelSoft p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <input
+                      className="h-8 w-40 rounded-md border border-border bg-background px-2 text-xs text-text"
+                      value={variant.label}
+                      onChange={(event) => setVariants(variants.map((item, itemIndex) => (itemIndex === index ? { ...item, label: event.target.value } : item)))}
+                    />
+                    <Button className="h-8 px-2" icon={<Trash2 className="size-3" />} onClick={() => setVariants(variants.filter((_, itemIndex) => itemIndex !== index))} />
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="grid gap-2 text-xs text-muted">{copy.hookOpening}<textarea className="min-h-16 rounded-md border border-border bg-background p-2 text-sm text-text" value={variant.hookText} onChange={(event) => setVariants(variants.map((item, itemIndex) => (itemIndex === index ? { ...item, hookText: event.target.value } : item)))} /></label>
+                    <label className="grid gap-2 text-xs text-muted">CTA<textarea className="min-h-16 rounded-md border border-border bg-background p-2 text-sm text-text" value={variant.ctaText} onChange={(event) => setVariants(variants.map((item, itemIndex) => (itemIndex === index ? { ...item, ctaText: event.target.value } : item)))} /></label>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {variants.length < 2 ? (
+              <Button className="mt-3" icon={<Lightbulb className="size-4" />} onClick={addVariant}>
+                {copy.addVariant}
+              </Button>
+            ) : null}
           </BriefSection>
         </div>
 

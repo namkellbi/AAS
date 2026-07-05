@@ -1,6 +1,6 @@
 'use client';
 
-import { Bookmark, Boxes, Flame, Home, KeyRound, LineChart, Settings, Sparkles } from 'lucide-react';
+import { Bookmark, Boxes, Flame, Home, KeyRound, LineChart, Settings, ShoppingBag, Sparkles } from 'lucide-react';
 import type { TranslationCopy } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -9,6 +9,7 @@ const nav = [
   { id: 'trending', labelKey: 'trendingFeed', icon: Flame },
   { id: 'keywords', labelKey: 'keywords', icon: KeyRound },
   { id: 'saved', labelKey: 'savedPosts', icon: Bookmark },
+  { id: 'products', labelKey: 'products', icon: ShoppingBag },
   { id: 'assets', label: 'Kho clip', icon: Boxes },
   { id: 'uploads', labelKey: 'results', icon: LineChart },
   { id: 'settings', labelKey: 'settings', icon: Settings }

@@ -1,40 +1,55 @@
 'use client';
 
-import { Bookmark, ExternalLink, Eye, Lightbulb, Radar, Sparkles, Target, TrendingUp, Video } from 'lucide-react';
+import { Bookmark, ExternalLink, Eye, Lightbulb, Link2, Radar, Sparkles, Target, TrendingUp, Video, Wand2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import type { TranslationCopy } from '@/lib/i18n';
-import type { AIAnalysis, OpportunityScanProgress, ThreadsPost, UploadLogEntry } from '@/lib/types';
+import type { AIAnalysis, ContentGoal, CreateFromLinkProgress, OpportunityScanProgress, ThreadsPost, UploadLogEntry } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export function OpportunityInbox({
   analyses,
   copy,
+  createLinkProgress,
+  createLinkUrl,
+  isCreatingFromLink,
   isScanning,
   logs,
   posts,
   savedIds,
+  scanGoal,
   scanProgress,
   scanSummary,
   onCreate,
+  onCreateFromLink,
+  onCreateLinkUrl,
   onInspect,
   onOpenLink,
   onSave,
-  onScan
+  onScan,
+  onScanGoal
 }: {
   analyses: Record<string, AIAnalysis>;
   copy: TranslationCopy;
+  createLinkProgress: CreateFromLinkProgress | null;
+  createLinkUrl: string;
+  isCreatingFromLink: boolean;
   isScanning: boolean;
   logs: UploadLogEntry[];
   posts: ThreadsPost[];
   savedIds: Set<string>;
+  scanGoal: ContentGoal;
   scanProgress: OpportunityScanProgress | null;
   scanSummary: { newPosts: number; seenPosts: number } | null;
   onCreate: (post: ThreadsPost) => void;
+  onCreateFromLink: () => void;
+  onCreateLinkUrl: (url: string) => void;
   onInspect: (post: ThreadsPost) => void;
   onOpenLink: (post: ThreadsPost) => void;
   onSave: (post: ThreadsPost) => void;
   onScan: () => void;
+  onScanGoal: (goal: ContentGoal) => void;
 }) {
   const shortlist = [...posts]
     .filter((post) => analyses[post.id] && analyses[post.id].verdict !== 'skip')
@@ -54,15 +69,66 @@ export function OpportunityInbox({
       </section>
 
       <section className="rounded-lg border border-border bg-panel p-4">
+        <div className="mb-3">
+          <h2 className="text-base font-semibold text-text">{copy.createFromLinkTitle}</h2>
+          <p className="mt-1 text-sm text-muted">{copy.createFromLinkHelp}</p>
+        </div>
+        <div className="flex gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Link2 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
+            <Input
+              value={createLinkUrl}
+              onChange={(event) => onCreateLinkUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') onCreateFromLink();
+              }}
+              className="pl-9"
+              placeholder={copy.manualImportPlaceholder}
+            />
+          </div>
+          <Button variant="primary" icon={<Wand2 className={cn('size-4', isCreatingFromLink && 'animate-pulse')} />} disabled={!createLinkUrl.trim() || isCreatingFromLink} onClick={onCreateFromLink}>
+            {isCreatingFromLink ? copy.createFromLinkWorking : copy.createFromLink}
+          </Button>
+        </div>
+        {isCreatingFromLink && createLinkProgress ? (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between gap-3 text-xs text-muted">
+              <span className="truncate">{createLinkProgress.message}</span>
+              <span>{createLinkProgress.percent}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-border">
+              <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${createLinkProgress.percent}%` }} />
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-lg border border-border bg-panel p-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-text">{copy.todayShortlist}</h2>
             <p className="mt-1 text-sm text-muted">{copy.todayShortlistHelp}</p>
             {scanSummary ? <p className="mt-2 text-xs text-sky-200">{scanSummary.newPosts} {copy.newPosts} · {scanSummary.seenPosts} {copy.seenPosts}</p> : null}
           </div>
-          <Button variant="primary" icon={<Radar className={cn('size-4', isScanning && 'animate-spin')} />} disabled={isScanning} onClick={onScan}>
-            {isScanning ? copy.scanningOpportunities : copy.scanOpportunities}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex overflow-hidden rounded-md border border-border" title={copy.scanGoalHelp}>
+              <button
+                className={cn('px-3 py-2 text-xs font-medium transition', scanGoal === 'affiliate' ? 'bg-accent/15 text-accent' : 'bg-panel text-muted hover:text-text')}
+                onClick={() => onScanGoal('affiliate')}
+              >
+                {copy.scanGoalAffiliate}
+              </button>
+              <button
+                className={cn('px-3 py-2 text-xs font-medium transition', scanGoal === 'engagement' ? 'bg-accent/15 text-accent' : 'bg-panel text-muted hover:text-text')}
+                onClick={() => onScanGoal('engagement')}
+              >
+                {copy.scanGoalEngagement}
+              </button>
+            </div>
+            <Button variant="primary" icon={<Radar className={cn('size-4', isScanning && 'animate-spin')} />} disabled={isScanning} onClick={onScan}>
+              {isScanning ? copy.scanningOpportunities : copy.scanOpportunities}
+            </Button>
+          </div>
         </div>
         {isScanning && scanProgress ? (
           <div className="mt-4 space-y-2">

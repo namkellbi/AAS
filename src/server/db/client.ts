@@ -5,10 +5,11 @@ import { getConfig } from '@/server/config';
 import { schema } from '@/server/db/schema';
 import { defaultKeywords } from '@/lib/default-keywords';
 import { recommendedOpenAIModel } from '@/lib/openai-models';
+import { defaultPricing, fallbackChatPricing, type PricingConfig } from '@/lib/pricing';
 import { filterUsefulReplies } from '@/lib/replies';
 import { detectThreadsAccountName } from '@/server/scraper/threadsScraper';
 import { scorePost } from '@/server/scoring/trendingScore';
-import type { AIAnalysis, AssetLibraryItem, AssetType, Keyword, KeywordExclusion, KeywordInsight, SavedPost, ThreadsPost, ThreadsReply, TrendState, UploadLogEntry } from '@/lib/types';
+import type { AIAnalysis, ApiUsageKind, AssetLibraryItem, AssetType, ContentGoal, Keyword, KeywordExclusion, KeywordInsight, Product, ReadinessThresholds, SavedPost, ThreadsPost, ThreadsReply, TrendState, TtsSegmentKind, UploadLogEntry, UsageSummary } from '@/lib/types';
 import { clamp, nowIso } from '@/lib/utils';
 
 let db: Database.Database | null = null;
@@ -41,14 +42,14 @@ function rescoreStoredPosts(database: Database.Database) {
   const rows = database.prepare('SELECT * FROM threads_posts').all() as Record<string, unknown>[];
   const update = database.prepare(`
     UPDATE threads_posts
-    SET trending_score = ?, affiliate_fit_score = ?, opportunity_score = ?, velocity_score = ?, video_potential_score = ?, emotional_category = ?
+    SET trending_score = ?, affiliate_fit_score = ?, opportunity_score = ?, velocity_score = ?, video_potential_score = ?, engagement_score = ?, emotional_category = ?
     WHERE id = ?
   `);
   const transaction = database.transaction(() => {
     for (const row of rows) {
       const post = rowToPost(row);
       const score = scorePost(post);
-      update.run(score.score, score.affiliateFitScore, score.opportunityScore, score.velocityScore, score.videoPotentialScore, score.emotionalCategory, post.id);
+      update.run(score.score, score.affiliateFitScore, score.opportunityScore, score.velocityScore, score.videoPotentialScore, score.engagementScore, score.emotionalCategory, post.id);
     }
   });
   transaction();
@@ -64,6 +65,7 @@ function migrateSchema(database: Database.Database) {
   ensureColumn(database, 'threads_posts', 'likes_per_hour', 'REAL NOT NULL DEFAULT 0');
   ensureColumn(database, 'threads_posts', 'replies_per_hour', 'REAL NOT NULL DEFAULT 0');
   ensureColumn(database, 'threads_posts', 'video_potential_score', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'threads_posts', 'engagement_score', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'ai_analysis', 'verdict', "TEXT NOT NULL DEFAULT 'watch'");
   ensureColumn(database, 'ai_analysis', 'confidence_score', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'ai_analysis', 'affiliate_fit_score', 'INTEGER NOT NULL DEFAULT 0');
@@ -83,6 +85,8 @@ function migrateSchema(database: Database.Database) {
   ensureColumn(database, 'ai_analysis', 'hashtags', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, 'ai_analysis', 'product_keywords', "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(database, 'ai_analysis', 'video_script', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(database, 'ai_analysis', 'content_goal', "TEXT NOT NULL DEFAULT 'affiliate'");
+  ensureColumn(database, 'ai_analysis', 'matched_product_id', 'TEXT');
   ensureColumn(database, 'keywords', 'source', "TEXT NOT NULL DEFAULT 'manual'");
   ensureColumn(database, 'keywords', 'seed_audience', 'TEXT');
   ensureColumn(database, 'keywords', 'created_at', "TEXT NOT NULL DEFAULT ''");
@@ -94,6 +98,13 @@ function migrateSchema(database: Database.Database) {
   ensureColumn(database, 'upload_log', 'revenue', 'REAL NOT NULL DEFAULT 0');
   ensureColumn(database, 'upload_log', 'commission', 'REAL NOT NULL DEFAULT 0');
   ensureColumn(database, 'upload_log', 'status', "TEXT NOT NULL DEFAULT 'published'");
+  ensureColumn(database, 'upload_log', 'content_goal', "TEXT NOT NULL DEFAULT 'affiliate'");
+  ensureColumn(database, 'upload_log', 'followers_gained', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'upload_log', 'comments', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'upload_log', 'saves', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'upload_log', 'shares', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'upload_log', 'product_id', 'TEXT');
+  ensureColumn(database, 'upload_log', 'variant_label', "TEXT NOT NULL DEFAULT ''");
   database.exec('DROP TABLE IF EXISTS video_queue');
   database
     .prepare("DELETE FROM app_settings WHERE key IN ('video.auto_send_to_queue', 'app.allow_demo_mode', 'elevenlabs.api_key', 'elevenlabs.voice_id')")
@@ -152,11 +163,11 @@ export function upsertPosts(posts: ThreadsPost[]) {
     INSERT INTO threads_posts (
       id, author, author_handle, content, likes, replies, reposts, timestamp, image_urls,
       url, source, keyword, fetched_at, trending_score, affiliate_fit_score, opportunity_score, velocity_score, engagement_growth_percent, emotional_category
-      , top_replies, trend_state, likes_per_hour, replies_per_hour, video_potential_score
+      , top_replies, trend_state, likes_per_hour, replies_per_hour, video_potential_score, engagement_score
     ) VALUES (
       @id, @author, @authorHandle, @content, @likes, @replies, @reposts, @timestamp, @imageUrls,
       @url, @source, @keyword, @fetchedAt, @trendingScore, @affiliateFitScore, @opportunityScore, @velocityScore, @engagementGrowthPercent, @emotionalCategory
-      , @topReplies, @trendState, @likesPerHour, @repliesPerHour, @videoPotentialScore
+      , @topReplies, @trendState, @likesPerHour, @repliesPerHour, @videoPotentialScore, @engagementScore
     )
     ON CONFLICT(id) DO UPDATE SET
       author = excluded.author,
@@ -182,6 +193,7 @@ export function upsertPosts(posts: ThreadsPost[]) {
       , likes_per_hour = excluded.likes_per_hour
       , replies_per_hour = excluded.replies_per_hour
       , video_potential_score = excluded.video_potential_score
+      , engagement_score = excluded.engagement_score
   `);
 
   const transaction = database.transaction((items: ThreadsPost[]) => {
@@ -329,12 +341,12 @@ export function storeAnalysis(analysis: AIAnalysis) {
         post_id, verdict, confidence_score, emotion, pain_point, buying_intent, affiliate_categories, affiliate_products,
         content_angle, why_viral, hooks, ctas, relatability_score, controversy_score, created_at
         , affiliate_fit_score, personas, situations, demo_angle, content_format, solution_script, product_search_keywords, script_outline, reject_reason
-        , comment_classifications, best_replies, video_potential_score, video_potential_breakdown, tiktok_caption, hashtags, product_keywords, video_script
+        , comment_classifications, best_replies, video_potential_score, video_potential_breakdown, tiktok_caption, hashtags, product_keywords, video_script, content_goal, matched_product_id
       ) VALUES (
         @postId, @verdict, @confidenceScore, @emotion, @painPoint, @buyingIntent, @affiliateCategories, @affiliateProducts,
         @contentAngle, @whyViral, @hooks, @ctas, @relatabilityScore, @controversyScore, @createdAt
         , @affiliateFitScore, @personas, @situations, @demoAngle, @contentFormat, @solutionScript, @productSearchKeywords, @scriptOutline, @rejectReason
-        , @commentClassifications, @bestReplies, @videoPotentialScore, @videoPotentialBreakdown, @tiktokCaption, @hashtags, @productKeywords, @videoScript
+        , @commentClassifications, @bestReplies, @videoPotentialScore, @videoPotentialBreakdown, @tiktokCaption, @hashtags, @productKeywords, @videoScript, @contentGoal, @matchedProductId
       )
       ON CONFLICT(post_id) DO UPDATE SET
         verdict = excluded.verdict,
@@ -367,6 +379,8 @@ export function storeAnalysis(analysis: AIAnalysis) {
         hashtags = excluded.hashtags,
         product_keywords = excluded.product_keywords,
         video_script = excluded.video_script,
+        content_goal = excluded.content_goal,
+        matched_product_id = excluded.matched_product_id,
         created_at = excluded.created_at
     `)
     .run({
@@ -385,8 +399,15 @@ export function storeAnalysis(analysis: AIAnalysis) {
       hashtags: JSON.stringify(analysis.hashtags),
       productKeywords: JSON.stringify(analysis.marketplaceKeywords),
       videoScript: JSON.stringify(analysis.videoScript),
-      rejectReason: analysis.rejectReason ?? null
+      rejectReason: analysis.rejectReason ?? null,
+      matchedProductId: analysis.matchedProductId ?? null
     });
+
+  if (analysis.contentGoal === 'engagement') {
+    // Engagement analyses must not distort the affiliate opportunity ranking.
+    getDb().prepare('UPDATE threads_posts SET video_potential_score = ? WHERE id = ?').run(analysis.videoPotentialScore, analysis.postId);
+    return;
+  }
 
   getDb()
     .prepare(`
@@ -706,6 +727,85 @@ export function getTransitionSoundEnabled() {
   return getSetting('video.transition_sound_enabled') === 'true';
 }
 
+export const defaultTtsInstructions: Record<TtsSegmentKind, string> = {
+  hook: 'Đọc nhanh, punchy, giọng gây tò mò như đang mở đầu một chuyện hay. Không tự thêm hoặc bớt nội dung.',
+  post: 'Đọc chậm rãi, tâm sự, như kể chuyện cho bạn thân nghe. Ngắt nghỉ tự nhiên theo dấu câu. Không tự thêm hoặc bớt nội dung.',
+  reply: 'Đọc nhẹ nhàng, tự nhiên như đang đọc bình luận cho bạn nghe. Không tự thêm hoặc bớt nội dung.',
+  transition: 'Đọc với tông chuyển nhẹ nhàng, như vừa phát hiện ra điều gì đó. Không tự thêm hoặc bớt nội dung.',
+  solution: 'Đọc ấm áp, thuyết phục nhưng thư giãn, tuyệt đối không gào hay lên gân bán hàng. Không tự thêm hoặc bớt nội dung.',
+  cta: 'Đọc ấm, thân thiện, low-pressure như một lời rủ nhẹ nhàng. Không tự thêm hoặc bớt nội dung.'
+};
+
+export function getTtsInstructions(): Record<TtsSegmentKind, string> {
+  const stored = jsonParse<Partial<Record<TtsSegmentKind, string>>>(getSetting('video.tts_instructions') ?? '{}', {});
+  const merged = { ...defaultTtsInstructions };
+  for (const kind of Object.keys(merged) as TtsSegmentKind[]) {
+    const value = stored[kind];
+    if (typeof value === 'string' && value.trim()) merged[kind] = value.trim();
+  }
+  return merged;
+}
+
+export function getTtsInstruction(kind: TtsSegmentKind): string {
+  return getTtsInstructions()[kind];
+}
+
+export function setTtsInstructions(overrides: Partial<Record<TtsSegmentKind, string>>) {
+  const stored = jsonParse<Partial<Record<TtsSegmentKind, string>>>(getSetting('video.tts_instructions') ?? '{}', {});
+  const next: Partial<Record<TtsSegmentKind, string>> = { ...stored };
+  for (const kind of Object.keys(defaultTtsInstructions) as TtsSegmentKind[]) {
+    const value = overrides[kind];
+    if (typeof value !== 'string') continue;
+    if (value.trim() && value.trim() !== defaultTtsInstructions[kind]) next[kind] = value.trim();
+    else delete next[kind];
+  }
+  setSetting('video.tts_instructions', JSON.stringify(next));
+}
+
+export function getSegmentSilenceMs() {
+  const value = Number(getSetting('video.segment_silence_ms'));
+  return Number.isFinite(value) ? Math.round(clamp(value, 0, 1500)) : 400;
+}
+
+export function getKaraokeCaptionsEnabled() {
+  return getSetting('video.karaoke_captions_enabled') !== 'false';
+}
+
+export function getScanGoal(): ContentGoal {
+  return getSetting('app.scan_goal') === 'engagement' ? 'engagement' : 'affiliate';
+}
+
+export const defaultReadinessThresholds: ReadinessThresholds = {
+  avgViews: 1000,
+  engagementRatePct: 4,
+  streakDays: 7,
+  followersGained: 500
+};
+
+export function getReadinessThresholds(): ReadinessThresholds {
+  const stored = jsonParse<Partial<ReadinessThresholds>>(getSetting('results.readiness_thresholds') ?? '{}', {});
+  return {
+    avgViews: numberOrDefault(stored.avgViews, defaultReadinessThresholds.avgViews),
+    engagementRatePct: numberOrDefault(stored.engagementRatePct, defaultReadinessThresholds.engagementRatePct),
+    streakDays: numberOrDefault(stored.streakDays, defaultReadinessThresholds.streakDays),
+    followersGained: numberOrDefault(stored.followersGained, defaultReadinessThresholds.followersGained)
+  };
+}
+
+export function setReadinessThresholds(overrides: Partial<ReadinessThresholds>) {
+  const next = { ...getReadinessThresholds() };
+  for (const key of Object.keys(defaultReadinessThresholds) as Array<keyof ReadinessThresholds>) {
+    const value = overrides[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) next[key] = Math.round(value);
+  }
+  setSetting('results.readiness_thresholds', JSON.stringify(next));
+}
+
+function numberOrDefault(value: unknown, fallback: number) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : fallback;
+}
+
 export function getPostAgeHours() {
   const value = Number(getSetting('scraper.post_age_hours'));
   return Number.isFinite(value) && value > 0 ? Math.round(clamp(value, 1, 168)) : 24;
@@ -762,6 +862,72 @@ export function markAssetUsed(filePath?: string) {
   getDb().prepare('UPDATE asset_library SET times_used = times_used + 1, last_used_at = ? WHERE file_path = ?').run(nowIso(), filePath);
 }
 
+export function listProducts(status?: Product['status']): Product[] {
+  const rows = status
+    ? (getDb().prepare('SELECT * FROM products WHERE status = ? ORDER BY updated_at DESC').all(status) as Record<string, unknown>[])
+    : (getDb().prepare('SELECT * FROM products ORDER BY updated_at DESC').all() as Record<string, unknown>[]);
+  return rows.map(rowToProduct);
+}
+
+export function getProduct(id: string): Product | null {
+  const row = getDb().prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  return row ? rowToProduct(row) : null;
+}
+
+export function saveProduct(product: Product): Product {
+  const id = product.id || crypto.randomUUID();
+  const now = nowIso();
+  getDb()
+    .prepare(`
+      INSERT INTO products (id, name, affiliate_link, price, commission_percent, category, marketplace, status, demo_asset_id, notes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name, affiliate_link = excluded.affiliate_link,
+        price = excluded.price, commission_percent = excluded.commission_percent, category = excluded.category,
+        marketplace = excluded.marketplace, status = excluded.status, demo_asset_id = excluded.demo_asset_id,
+        notes = excluded.notes, updated_at = excluded.updated_at
+    `)
+    .run(
+      id,
+      product.name.trim(),
+      product.affiliateLink.trim(),
+      Number.isFinite(product.price) ? product.price : 0,
+      Number.isFinite(product.commissionPercent) ? product.commissionPercent : 0,
+      product.category.trim(),
+      productMarketplaceValue(product.marketplace),
+      product.status === 'paused' ? 'paused' : 'active',
+      product.demoAssetId || null,
+      product.notes,
+      product.createdAt || now,
+      now
+    );
+  return { ...product, id, createdAt: product.createdAt || now, updatedAt: now };
+}
+
+export function deleteProduct(id: string) {
+  getDb().prepare('DELETE FROM products WHERE id = ?').run(id);
+}
+
+function rowToProduct(row: Record<string, unknown>): Product {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    affiliateLink: String(row.affiliate_link ?? ''),
+    price: Number(row.price ?? 0),
+    commissionPercent: Number(row.commission_percent ?? 0),
+    category: String(row.category ?? ''),
+    marketplace: productMarketplaceValue(row.marketplace),
+    status: row.status === 'paused' ? 'paused' : 'active',
+    demoAssetId: row.demo_asset_id ? String(row.demo_asset_id) : undefined,
+    notes: String(row.notes ?? ''),
+    createdAt: String(row.created_at ?? ''),
+    updatedAt: String(row.updated_at ?? '')
+  };
+}
+
+function productMarketplaceValue(value: unknown): Product['marketplace'] {
+  return value === 'shopee' || value === 'other' ? value : 'tiktok_shop';
+}
+
 export function listUploadLogs(): UploadLogEntry[] {
   const rows = getDb().prepare('SELECT * FROM upload_log ORDER BY uploaded_at DESC').all() as Record<string, unknown>[];
   return rows.map(rowToUploadLog);
@@ -773,14 +939,18 @@ export function saveUploadLog(entry: UploadLogEntry): UploadLogEntry {
     .prepare(`
       INSERT INTO upload_log (
         id, post_id, tiktok_url, product_name, hook, content_format, uploaded_at,
-        views, clicks, orders, revenue, commission, status, note
+        views, clicks, orders, revenue, commission, status, note,
+        content_goal, followers_gained, comments, saves, shares, product_id, variant_label
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET post_id = excluded.post_id, tiktok_url = excluded.tiktok_url,
         product_name = excluded.product_name, hook = excluded.hook, content_format = excluded.content_format,
         uploaded_at = excluded.uploaded_at, views = excluded.views, clicks = excluded.clicks,
         orders = excluded.orders, revenue = excluded.revenue, commission = excluded.commission,
-        status = excluded.status, note = excluded.note
+        status = excluded.status, note = excluded.note,
+        content_goal = excluded.content_goal, followers_gained = excluded.followers_gained,
+        comments = excluded.comments, saves = excluded.saves, shares = excluded.shares,
+        product_id = excluded.product_id, variant_label = excluded.variant_label
     `)
     .run(
       id,
@@ -796,7 +966,14 @@ export function saveUploadLog(entry: UploadLogEntry): UploadLogEntry {
       entry.revenue,
       entry.commission,
       entry.status,
-      entry.note
+      entry.note,
+      contentGoalValue(entry.contentGoal),
+      entry.followersGained ?? 0,
+      entry.comments ?? 0,
+      entry.saves ?? 0,
+      entry.shares ?? 0,
+      entry.productId || null,
+      entry.variantLabel ?? ''
     );
   return { ...entry, id, uploadedAt: entry.uploadedAt || nowIso() };
 }
@@ -808,10 +985,11 @@ export function deleteUploadLog(id: string) {
 export function getAffiliatePerformanceContext() {
   const rows = getDb()
     .prepare(`
-      SELECT product_name, hook, content_format, views, clicks, orders, revenue, commission
-      FROM upload_log
-      WHERE status <> 'stopped'
-      ORDER BY commission DESC, orders DESC, clicks DESC
+      SELECT COALESCE(p.name, u.product_name) AS product_name, u.hook, u.content_format, u.views, u.clicks, u.orders, u.revenue, u.commission
+      FROM upload_log u
+      LEFT JOIN products p ON p.id = u.product_id
+      WHERE u.status <> 'stopped'
+      ORDER BY u.commission DESC, u.orders DESC, u.clicks DESC
       LIMIT 12
     `)
     .all() as Array<Record<string, unknown>>;
@@ -826,6 +1004,110 @@ export function getAffiliatePerformanceContext() {
     revenue: Number(row.revenue ?? 0),
     commission: Number(row.commission ?? 0)
   }));
+}
+
+export function getPricing(): PricingConfig {
+  const stored = jsonParse<Partial<PricingConfig>>(getSetting('costs.pricing') ?? '{}', {});
+  return {
+    chat: { ...defaultPricing.chat, ...(stored.chat ?? {}) },
+    ttsPerMillionChars: positiveNumber(stored.ttsPerMillionChars, defaultPricing.ttsPerMillionChars),
+    whisperPerMinute: positiveNumber(stored.whisperPerMinute, defaultPricing.whisperPerMinute)
+  };
+}
+
+export function updatePricing(overrides: Partial<{ chatInPerM: number; chatOutPerM: number; ttsPerMillionChars: number; whisperPerMinute: number }>) {
+  const stored = jsonParse<Partial<PricingConfig>>(getSetting('costs.pricing') ?? '{}', {});
+  const model = getOpenAiModel();
+  const current = getPricing();
+  const chatCurrent = current.chat[model] ?? fallbackChatPricing;
+  const next: Partial<PricingConfig> = {
+    chat: { ...(stored.chat ?? {}) },
+    ttsPerMillionChars: positiveNumber(overrides.ttsPerMillionChars, current.ttsPerMillionChars),
+    whisperPerMinute: positiveNumber(overrides.whisperPerMinute, current.whisperPerMinute)
+  };
+  if (typeof overrides.chatInPerM === 'number' || typeof overrides.chatOutPerM === 'number') {
+    next.chat = {
+      ...next.chat,
+      [model]: {
+        inPerM: positiveNumber(overrides.chatInPerM, chatCurrent.inPerM),
+        outPerM: positiveNumber(overrides.chatOutPerM, chatCurrent.outPerM)
+      }
+    };
+  }
+  setSetting('costs.pricing', JSON.stringify(next));
+}
+
+function positiveNumber(value: unknown, fallback: number) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+export function estimateCostUsd(kind: ApiUsageKind, model: string, inputUnits: number, outputUnits: number): number {
+  const pricing = getPricing();
+  if (kind === 'analysis' || kind === 'keyword_discovery') {
+    const chat = pricing.chat[model] ?? fallbackChatPricing;
+    return (inputUnits / 1_000_000) * chat.inPerM + (outputUnits / 1_000_000) * chat.outPerM;
+  }
+  if (kind === 'tts') return (inputUnits / 1_000_000) * pricing.ttsPerMillionChars;
+  return (inputUnits / 60) * pricing.whisperPerMinute;
+}
+
+export function logApiUsage(entry: { kind: ApiUsageKind; model: string; inputUnits: number; outputUnits?: number; relatedPostId?: string }) {
+  const outputUnits = entry.outputUnits ?? 0;
+  const cost = estimateCostUsd(entry.kind, entry.model, entry.inputUnits, outputUnits);
+  getDb()
+    .prepare('INSERT INTO api_usage_log (id, kind, model, input_units, output_units, estimated_cost_usd, related_post_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), entry.kind, entry.model, Math.round(entry.inputUnits), Math.round(outputUnits), cost, entry.relatedPostId ?? null, nowIso());
+}
+
+export function getTodayApiCostUsd(): number {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const row = getDb()
+    .prepare('SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total FROM api_usage_log WHERE created_at >= ?')
+    .get(startOfDay.toISOString()) as { total: number };
+  return row.total;
+}
+
+export function getDailyCostLimitUsd(): number {
+  const value = Number(getSetting('costs.daily_limit_usd'));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function checkDailyQuota(): { exceeded: boolean; todayUsd: number; limitUsd: number } {
+  const limitUsd = getDailyCostLimitUsd();
+  const todayUsd = getTodayApiCostUsd();
+  return { exceeded: limitUsd > 0 && todayUsd >= limitUsd, todayUsd, limitUsd };
+}
+
+export function getUsageSummary(): UsageSummary {
+  const database = getDb();
+  const since30 = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const perKindRows = database
+    .prepare('SELECT kind, COALESCE(SUM(input_units + output_units), 0) AS units, COALESCE(SUM(estimated_cost_usd), 0) AS usd FROM api_usage_log WHERE created_at >= ? GROUP BY kind')
+    .all(since30) as Array<{ kind: string; units: number; usd: number }>;
+  const perKind: UsageSummary['perKind'] = {
+    analysis: { units: 0, usd: 0 },
+    keyword_discovery: { units: 0, usd: 0 },
+    tts: { units: 0, usd: 0 },
+    transcription: { units: 0, usd: 0 }
+  };
+  for (const row of perKindRows) {
+    if (row.kind in perKind) perKind[row.kind as ApiUsageKind] = { units: row.units, usd: row.usd };
+  }
+  const last30 = database
+    .prepare('SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total FROM api_usage_log WHERE created_at >= ?')
+    .get(since30) as { total: number };
+  const drafts = database
+    .prepare("SELECT COUNT(DISTINCT related_post_id) AS count FROM api_usage_log WHERE created_at >= ? AND kind = 'tts' AND related_post_id IS NOT NULL")
+    .get(since30) as { count: number };
+  return {
+    todayUsd: getTodayApiCostUsd(),
+    last30Usd: last30.total,
+    perKind,
+    costPerDraft: drafts.count > 0 ? last30.total / drafts.count : 0,
+    draftCount: drafts.count
+  };
 }
 
 export function getAppSettings() {
@@ -847,6 +1129,24 @@ export function getAppSettings() {
     , defaultSpeed: getDefaultSpeed()
     , transitionSoundEnabled: getTransitionSoundEnabled()
     , postAgeHours: getPostAgeHours()
+    , ttsInstructions: getTtsInstructions()
+    , segmentSilenceMs: getSegmentSilenceMs()
+    , karaokeCaptionsEnabled: getKaraokeCaptionsEnabled()
+    , scanGoal: getScanGoal()
+    , readinessThresholds: getReadinessThresholds()
+    , dailyCostLimitUsd: getDailyCostLimitUsd()
+    , pricing: resolvePricingView()
+  };
+}
+
+function resolvePricingView() {
+  const pricing = getPricing();
+  const chat = pricing.chat[getOpenAiModel()] ?? fallbackChatPricing;
+  return {
+    chatInPerM: chat.inPerM,
+    chatOutPerM: chat.outPerM,
+    ttsPerMillionChars: pricing.ttsPerMillionChars,
+    whisperPerMinute: pricing.whisperPerMinute
   };
 }
 
@@ -913,6 +1213,7 @@ function rowToPost(row: Record<string, unknown>): ThreadsPost {
     , likesPerHour: Number(row.likes_per_hour ?? 0)
     , repliesPerHour: Number(row.replies_per_hour ?? 0)
     , videoPotentialScore: Number(row.video_potential_score ?? 0)
+    , engagementScore: Number(row.engagement_score ?? 0)
   };
 }
 
@@ -949,8 +1250,14 @@ function rowToAnalysis(row: Record<string, unknown>): AIAnalysis {
     hashtags: jsonParse(String(row.hashtags ?? '[]'), []),
     marketplaceKeywords: jsonParse(String(row.product_keywords ?? '{}'), { tiktokShop: '', shopee: '' }),
     videoScript: normalizeStoredVideoScript(row.video_script, row.solution_script),
+    contentGoal: contentGoalValue(row.content_goal),
+    matchedProductId: row.matched_product_id ? String(row.matched_product_id) : undefined,
     createdAt: String(row.created_at)
   };
+}
+
+function contentGoalValue(value: unknown): ContentGoal {
+  return value === 'engagement' ? 'engagement' : 'affiliate';
 }
 
 function normalizeStoredVideoScript(value: unknown, fallbackSolution: unknown): AIAnalysis['videoScript'] {
@@ -999,7 +1306,14 @@ function rowToUploadLog(row: Record<string, unknown>): UploadLogEntry {
     revenue: Number(row.revenue ?? 0),
     commission: Number(row.commission ?? 0),
     status: uploadStatusValue(row.status),
-    note: String(row.note ?? '')
+    note: String(row.note ?? ''),
+    contentGoal: contentGoalValue(row.content_goal),
+    followersGained: Number(row.followers_gained ?? 0),
+    comments: Number(row.comments ?? 0),
+    saves: Number(row.saves ?? 0),
+    shares: Number(row.shares ?? 0),
+    productId: row.product_id ? String(row.product_id) : undefined,
+    variantLabel: String(row.variant_label ?? '')
   };
 }
 

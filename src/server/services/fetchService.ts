@@ -56,6 +56,7 @@ export async function refreshPostReplies(post: ThreadsPost) {
     opportunityScore: score.opportunityScore,
     velocityScore: score.velocityScore,
     videoPotentialScore: score.videoPotentialScore,
+    engagementScore: score.engagementScore,
     emotionalCategory: score.emotionalCategory
   };
   upsertPosts([updated]);
@@ -65,7 +66,7 @@ export async function refreshPostReplies(post: ThreadsPost) {
 function scoreStoredPosts(posts: ThreadsPost[]) {
   return posts.map((post) => {
     const score = scorePost(post);
-    return { ...post, trendingScore: score.score, affiliateFitScore: score.affiliateFitScore, opportunityScore: score.opportunityScore, velocityScore: score.velocityScore, videoPotentialScore: score.videoPotentialScore };
+    return { ...post, trendingScore: score.score, affiliateFitScore: score.affiliateFitScore, opportunityScore: score.opportunityScore, velocityScore: score.velocityScore, videoPotentialScore: score.videoPotentialScore, engagementScore: score.engagementScore };
   });
 }
 

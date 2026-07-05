@@ -1,5 +1,6 @@
 export type FetchMode = 'home' | 'keyword' | 'hashtag' | 'profile' | 'trending' | 'manual';
 export type TrendState = 'EMERGING' | 'GROWING' | 'PEAK' | 'DECLINING' | 'DEAD';
+export type ContentGoal = 'engagement' | 'affiliate';
 
 export type ThreadsReply = {
   id: string;
@@ -33,6 +34,7 @@ export type ThreadsPost = {
   likesPerHour: number;
   repliesPerHour: number;
   videoPotentialScore: number;
+  engagementScore: number;
 };
 
 export type ViralScoreBreakdown = {
@@ -115,6 +117,8 @@ export type AIAnalysis = {
     ctaText: string;
     captionVariants: string[];
   };
+  contentGoal: ContentGoal;
+  matchedProductId?: string;
   createdAt: string;
 };
 
@@ -180,6 +184,8 @@ export type SavedPost = {
   savedAt: string;
 };
 
+export type TtsSegmentKind = 'hook' | 'post' | 'reply' | 'transition' | 'solution' | 'cta';
+
 export type AppSettings = {
   openAiApiKeySet: boolean;
   maskedOpenAiApiKey?: string;
@@ -195,6 +201,18 @@ export type AppSettings = {
   defaultSpeed: number;
   transitionSoundEnabled: boolean;
   postAgeHours: number;
+  ttsInstructions: Record<TtsSegmentKind, string>;
+  segmentSilenceMs: number;
+  karaokeCaptionsEnabled: boolean;
+  scanGoal: ContentGoal;
+  readinessThresholds: ReadinessThresholds;
+  dailyCostLimitUsd: number;
+  pricing: {
+    chatInPerM: number;
+    chatOutPerM: number;
+    ttsPerMillionChars: number;
+    whisperPerMinute: number;
+  };
 };
 
 export type UpdateSettingsRequest = {
@@ -209,11 +227,29 @@ export type UpdateSettingsRequest = {
   defaultSpeed?: number;
   transitionSoundEnabled?: boolean;
   postAgeHours?: number;
+  ttsInstructions?: Partial<Record<TtsSegmentKind, string>>;
+  segmentSilenceMs?: number;
+  karaokeCaptionsEnabled?: boolean;
+  scanGoal?: ContentGoal;
+  readinessThresholds?: Partial<ReadinessThresholds>;
+  dailyCostLimitUsd?: number;
+  pricing?: Partial<{
+    chatInPerM: number;
+    chatOutPerM: number;
+    ttsPerMillionChars: number;
+    whisperPerMinute: number;
+  }>;
 };
 
 export type ServiceHealth = {
   ok: boolean;
   message: string;
+};
+
+export type VideoDraftVariant = {
+  label: string;
+  hookText: string;
+  ctaText: string;
 };
 
 export type VideoDraftRequest = {
@@ -227,10 +263,12 @@ export type VideoDraftRequest = {
   ctaText?: string;
   backgroundPath?: string;
   productClipPath?: string;
+  variants?: VideoDraftVariant[];
 };
 
 export type VideoDraftResult = ServiceHealth & {
   filePath?: string;
+  variantPaths?: string[];
 };
 
 export type VideoDraftProgress = {
@@ -274,6 +312,33 @@ export type OpportunityScanProgress = {
   keyword?: string;
 };
 
+export type CreateFromLinkProgress = {
+  phase: 'importing' | 'analyzing' | 'ready';
+  percent: number;
+  message: string;
+};
+
+export type CreateFromLinkResult = {
+  post: ThreadsPost;
+  analysis: AIAnalysis;
+  backgroundPath?: string;
+};
+
+export type Product = {
+  id: string;
+  name: string;
+  affiliateLink: string;
+  price: number;
+  commissionPercent: number;
+  category: string;
+  marketplace: 'tiktok_shop' | 'shopee' | 'other';
+  status: 'active' | 'paused';
+  demoAssetId?: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AssetType = 'background' | 'product';
 
 export type AssetLibraryItem = {
@@ -302,15 +367,47 @@ export type UploadLogEntry = {
   commission: number;
   status: 'published' | 'tracking' | 'winner' | 'stopped';
   note: string;
+  contentGoal: ContentGoal;
+  followersGained: number;
+  comments: number;
+  saves: number;
+  shares: number;
+  productId?: string;
+  variantLabel: string;
+};
+
+export type ReadinessThresholds = {
+  avgViews: number;
+  engagementRatePct: number;
+  streakDays: number;
+  followersGained: number;
+};
+
+export type ApiUsageKind = 'analysis' | 'keyword_discovery' | 'tts' | 'transcription';
+
+export type UsageSummary = {
+  todayUsd: number;
+  last30Usd: number;
+  perKind: Record<ApiUsageKind, { units: number; usd: number }>;
+  costPerDraft: number;
+  draftCount: number;
+};
+
+export type QuotaBlockedResult = {
+  quotaExceeded: true;
+  todayUsd: number;
+  limitUsd: number;
 };
 
 export type DesktopAPI = {
   fetchThreads: (request: FetchRequest) => Promise<FetchResult>;
   importThreadsPost: (url: string) => Promise<ThreadsPost>;
   fetchPostReplies: (post: ThreadsPost) => Promise<ThreadsPost>;
-  scanOpportunities: () => Promise<OpportunityScanResult>;
+  scanOpportunities: (goal?: ContentGoal, options?: { confirmOverQuota?: boolean }) => Promise<OpportunityScanResult | QuotaBlockedResult>;
   onOpportunityScanProgress: (listener: (progress: OpportunityScanProgress) => void) => () => void;
-  analyzePost: (post: ThreadsPost) => Promise<AIAnalysis>;
+  createFromLink: (url: string, options?: { confirmOverQuota?: boolean }) => Promise<CreateFromLinkResult | QuotaBlockedResult>;
+  onCreateFromLinkProgress: (listener: (progress: CreateFromLinkProgress) => void) => () => void;
+  analyzePost: (post: ThreadsPost, goal?: ContentGoal, options?: { confirmOverQuota?: boolean }) => Promise<AIAnalysis | QuotaBlockedResult>;
   getPosts: () => Promise<ThreadsPost[]>;
   getAnalysis: (postId: string) => Promise<AIAnalysis | null>;
   getAnalyses: () => Promise<AIAnalysis[]>;
@@ -345,6 +442,10 @@ export type DesktopAPI = {
   getUploadLogs: () => Promise<UploadLogEntry[]>;
   saveUploadLog: (entry: UploadLogEntry) => Promise<UploadLogEntry>;
   deleteUploadLog: (id: string) => Promise<void>;
+  getProducts: () => Promise<Product[]>;
+  saveProduct: (product: Product) => Promise<Product>;
+  deleteProduct: (id: string) => Promise<void>;
+  getUsageSummary: () => Promise<UsageSummary>;
 };
 
 declare global {

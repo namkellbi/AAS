@@ -1,11 +1,11 @@
 'use client';
 
-import { ExternalLink, Pencil, Plus, Trash2, TrendingUp, X } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Pencil, Plus, Trash2, TrendingUp, X, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { TranslationCopy } from '@/lib/i18n';
-import type { ThreadsPost, UploadLogEntry } from '@/lib/types';
+import type { AIAnalysis, Product, ReadinessThresholds, ThreadsPost, UploadLogEntry, UsageSummary } from '@/lib/types';
 import { cn, compactNumber } from '@/lib/utils';
 
 const emptyEntry = (postId = ''): UploadLogEntry => ({
@@ -22,27 +22,66 @@ const emptyEntry = (postId = ''): UploadLogEntry => ({
   revenue: 0,
   commission: 0,
   status: 'published',
-  note: ''
+  note: '',
+  contentGoal: 'affiliate',
+  followersGained: 0,
+  comments: 0,
+  saves: 0,
+  shares: 0,
+  variantLabel: ''
 });
 
 export function ResultsView({
+  analyses,
   copy,
   logs,
   posts,
+  products,
+  thresholds,
+  usage,
   onDelete,
-  onSave
+  onSave,
+  onSaveThresholds
 }: {
+  analyses: AIAnalysis[];
   copy: TranslationCopy;
   logs: UploadLogEntry[];
   posts: ThreadsPost[];
+  products: Product[];
+  thresholds: ReadinessThresholds;
+  usage: UsageSummary | null;
   onDelete: (id: string) => Promise<void>;
   onSave: (entry: UploadLogEntry) => Promise<void>;
+  onSaveThresholds: (thresholds: Partial<ReadinessThresholds>) => void;
 }) {
   const [draft, setDraft] = useState<UploadLogEntry>(() => emptyEntry(posts[0]?.id));
   const [editing, setEditing] = useState(false);
+  const [thresholdDraft, setThresholdDraft] = useState<ReadinessThresholds>(thresholds);
   useEffect(() => {
     if (!draft.postId && posts[0]) setDraft((current) => ({ ...current, postId: posts[0].id }));
   }, [draft.postId, posts]);
+  useEffect(() => {
+    setThresholdDraft(thresholds);
+  }, [thresholds]);
+
+  const readiness = useMemo(() => {
+    const recent = [...logs].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 10);
+    const recentViews = recent.reduce((sum, item) => sum + item.views, 0);
+    const avgViews = recent.length ? Math.round(recentViews / recent.length) : 0;
+    const engagementActions = recent.reduce((sum, item) => sum + item.comments + item.saves + item.shares, 0);
+    const engagementRatePct = recentViews ? (engagementActions / recentViews) * 100 : 0;
+    const followersTotal = logs.reduce((sum, item) => sum + item.followersGained, 0);
+    const streak = postingStreak(logs);
+    const engagementCount = recent.filter((item) => item.contentGoal === 'engagement').length;
+    return { avgViews, engagementRatePct, followersTotal, streak, engagementCount, recentCount: recent.length };
+  }, [logs]);
+  const readinessChecks = [
+    { label: copy.avgRecentViews, value: compactNumber(readiness.avgViews), pass: readiness.avgViews >= thresholds.avgViews, target: compactNumber(thresholds.avgViews) },
+    { label: copy.engagementRate, value: `${readiness.engagementRatePct.toFixed(1)}%`, pass: readiness.engagementRatePct >= thresholds.engagementRatePct, target: `${thresholds.engagementRatePct}%` },
+    { label: copy.postingStreak, value: String(readiness.streak), pass: readiness.streak >= thresholds.streakDays, target: String(thresholds.streakDays) },
+    { label: copy.followersGained, value: compactNumber(readiness.followersTotal), pass: readiness.followersTotal >= thresholds.followersGained, target: compactNumber(thresholds.followersGained) }
+  ];
+  const readyForAffiliate = readinessChecks.every((check) => check.pass);
 
   const totals = useMemo(() => logs.reduce((sum, item) => ({
     views: sum.views + item.views,
@@ -53,6 +92,11 @@ export function ResultsView({
   const clickRate = totals.views ? (totals.clicks / totals.views) * 100 : 0;
   const conversionRate = totals.clicks ? (totals.orders / totals.clicks) * 100 : 0;
   const winners = [...logs].filter((item) => item.orders > 0 || item.commission > 0).sort((a, b) => b.commission - a.commission || b.orders - a.orders).slice(0, 3);
+  const publishedCount = logs.filter((item) => item.status !== 'stopped').length;
+  const commissionPerVideo = publishedCount ? totals.commission / publishedCount : 0;
+  const makeNowAnalyses = analyses.filter((item) => item.verdict === 'make_now');
+  const postedPostIds = new Set(logs.map((item) => item.postId));
+  const makeNowPostedRate = makeNowAnalyses.length ? (makeNowAnalyses.filter((item) => postedPostIds.has(item.postId)).length / makeNowAnalyses.length) * 100 : 0;
 
   async function saveDraft() {
     if (!draft.postId) return;
@@ -75,6 +119,47 @@ export function ResultsView({
         <ResultMetric label={copy.totalCommission} value={currency(totals.commission)} accent />
       </section>
 
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <ResultMetric label={copy.costPerDraft} value={usage ? `$${usage.costPerDraft.toFixed(2)}` : '—'} />
+        <ResultMetric label={copy.commissionPerVideo} value={currency(commissionPerVideo)} />
+        <ResultMetric label={copy.makeNowPostedRate} value={`${makeNowPostedRate.toFixed(0)}%`} />
+        <ResultMetric label={copy.todayApiCost} value={usage ? `$${usage.todayUsd.toFixed(2)}` : '—'} />
+      </section>
+
+      <section className="rounded-lg border border-border bg-panel p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-text">{copy.channelReadiness}</h3>
+            <p className="mt-1 text-xs text-muted">{copy.readinessHelp}</p>
+          </div>
+          <span className={cn('inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold', readyForAffiliate ? 'bg-success/15 text-emerald-200' : 'bg-warning/15 text-amber-200')}>
+            {readyForAffiliate ? <CheckCircle2 className="size-3.5" /> : <XCircle className="size-3.5" />}
+            {copy.readyForAffiliate}
+          </span>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {readinessChecks.map((check) => (
+            <div key={check.label} className={cn('rounded-md border p-3', check.pass ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-border bg-panelSoft')}>
+              <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">{check.label}</div>
+              <div className={cn('mt-2 text-xl font-semibold', check.pass ? 'text-emerald-200' : 'text-text')}>{check.value}</div>
+              <div className="mt-1 text-[11px] text-muted">≥ {check.target}</div>
+            </div>
+          ))}
+        </div>
+        {readiness.recentCount ? (
+          <div className="mt-3 text-xs text-muted">{copy.contentMix}: {readiness.engagementCount} {copy.goalEngagement.toLowerCase()} · {readiness.recentCount - readiness.engagementCount} {copy.goalAffiliate.toLowerCase()}</div>
+        ) : null}
+        <div className="mt-4 grid gap-3 border-t border-border pt-4 md:grid-cols-2 xl:grid-cols-5">
+          <NumberInput label={copy.avgRecentViews} value={thresholdDraft.avgViews} onChange={(avgViews) => setThresholdDraft({ ...thresholdDraft, avgViews })} />
+          <NumberInput label={`${copy.engagementRate} (%)`} value={thresholdDraft.engagementRatePct} onChange={(engagementRatePct) => setThresholdDraft({ ...thresholdDraft, engagementRatePct })} />
+          <NumberInput label={copy.postingStreak} value={thresholdDraft.streakDays} onChange={(streakDays) => setThresholdDraft({ ...thresholdDraft, streakDays })} />
+          <NumberInput label={copy.followersGained} value={thresholdDraft.followersGained} onChange={(followersGained) => setThresholdDraft({ ...thresholdDraft, followersGained })} />
+          <div className="flex items-end">
+            <Button onClick={() => onSaveThresholds(thresholdDraft)}>{copy.save}</Button>
+          </div>
+        </div>
+      </section>
+
       <section className="rounded-lg border border-border bg-panel p-4">
         <div className="mb-3 flex items-center justify-between">
           <div>
@@ -92,6 +177,17 @@ export function ResultsView({
             {posts.map((post) => <option key={post.id} value={post.id}>{post.author}: {post.content.slice(0, 44)}</option>)}
           </select>
           <Input placeholder="TikTok URL" value={draft.tiktokUrl} onChange={(event) => setDraft({ ...draft, tiktokUrl: event.target.value })} />
+          <select
+            className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text"
+            value={draft.productId ?? ''}
+            onChange={(event) => {
+              const product = products.find((item) => item.id === event.target.value);
+              setDraft({ ...draft, productId: product?.id, productName: product ? product.name : draft.productName });
+            }}
+          >
+            <option value="">{copy.chooseProduct}</option>
+            {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+          </select>
           <Input placeholder={copy.productName} value={draft.productName} onChange={(event) => setDraft({ ...draft, productName: event.target.value })} />
           <Input placeholder={copy.hookUsed} value={draft.hook} onChange={(event) => setDraft({ ...draft, hook: event.target.value })} />
           <Input placeholder={copy.formatUsed} value={draft.contentFormat} onChange={(event) => setDraft({ ...draft, contentFormat: event.target.value })} />
@@ -100,6 +196,18 @@ export function ResultsView({
           <NumberInput label={copy.orders} value={draft.orders} onChange={(orders) => setDraft({ ...draft, orders })} />
           <NumberInput label={copy.revenue} value={draft.revenue} onChange={(revenue) => setDraft({ ...draft, revenue })} />
           <NumberInput label={copy.commission} value={draft.commission} onChange={(commission) => setDraft({ ...draft, commission })} />
+          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
+            {copy.contentGoal}
+            <select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={draft.contentGoal} onChange={(event) => setDraft({ ...draft, contentGoal: event.target.value === 'engagement' ? 'engagement' : 'affiliate' })}>
+              <option value="affiliate">{copy.goalAffiliate}</option>
+              <option value="engagement">{copy.goalEngagement}</option>
+            </select>
+          </label>
+          <NumberInput label={copy.commentsMetric} value={draft.comments} onChange={(comments) => setDraft({ ...draft, comments })} />
+          <NumberInput label={copy.savesMetric} value={draft.saves} onChange={(saves) => setDraft({ ...draft, saves })} />
+          <NumberInput label={copy.sharesMetric} value={draft.shares} onChange={(shares) => setDraft({ ...draft, shares })} />
+          <NumberInput label={copy.followersGained} value={draft.followersGained} onChange={(followersGained) => setDraft({ ...draft, followersGained })} />
+          <Input placeholder={copy.variantLabelField} value={draft.variantLabel} onChange={(event) => setDraft({ ...draft, variantLabel: event.target.value })} />
           <select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as UploadLogEntry['status'] })}>
             <option value="published">{copy.published}</option>
             <option value="tracking">{copy.tracking}</option>
@@ -155,6 +263,23 @@ export function ResultsView({
       </section>
     </div>
   );
+}
+
+function postingStreak(logs: UploadLogEntry[]): number {
+  const days = [...new Set(logs.map((log) => log.uploadedAt.slice(0, 10)))].sort().reverse();
+  if (!days.length) return 0;
+  let streak = 1;
+  let current = new Date(`${days[0]}T00:00:00Z`).getTime();
+  for (let index = 1; index < days.length; index += 1) {
+    const previous = new Date(`${days[index]}T00:00:00Z`).getTime();
+    if (Math.round((current - previous) / 86_400_000) === 1) {
+      streak += 1;
+      current = previous;
+    } else {
+      break;
+    }
+  }
+  return streak;
 }
 
 function NumberInput({ label, onChange, value }: { label: string; onChange: (value: number) => void; value: number }) {

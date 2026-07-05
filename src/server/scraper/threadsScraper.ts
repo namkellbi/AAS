@@ -7,7 +7,7 @@ import { nowIso } from '@/lib/utils';
 import { getConfig } from '@/server/config';
 import { scorePost } from '@/server/scoring/trendingScore';
 
-type RawPost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory' | 'topReplies' | 'trendState' | 'likesPerHour' | 'repliesPerHour' | 'videoPotentialScore'>;
+type RawPost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory' | 'topReplies' | 'trendState' | 'likesPerHour' | 'repliesPerHour' | 'videoPotentialScore' | 'engagementScore'>;
 
 export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsPost[]> {
   const config = getConfig();
@@ -241,7 +241,8 @@ function scoreRawPost(raw: RawPost, topReplies: ThreadsReply[] = []): ThreadsPos
     velocityScore: scored.velocityScore,
     engagementGrowthPercent: scored.engagementGrowthPercent,
     emotionalCategory: scored.emotionalCategory,
-    videoPotentialScore: scored.videoPotentialScore
+    videoPotentialScore: scored.videoPotentialScore,
+    engagementScore: scored.engagementScore
   };
 }
 
@@ -258,7 +259,7 @@ async function attachTopReplies(page: Page, posts: ThreadsPost[]) {
     const refreshed = replyMap.get(post.id);
     const next = { ...post, topReplies: refreshed?.length ? refreshed : filterUsefulReplies(post.topReplies) };
     const score = scorePost(next);
-    return { ...next, trendingScore: score.score, affiliateFitScore: score.affiliateFitScore, opportunityScore: score.opportunityScore, velocityScore: score.velocityScore, emotionalCategory: score.emotionalCategory, videoPotentialScore: score.videoPotentialScore };
+    return { ...next, trendingScore: score.score, affiliateFitScore: score.affiliateFitScore, opportunityScore: score.opportunityScore, velocityScore: score.velocityScore, emotionalCategory: score.emotionalCategory, videoPotentialScore: score.videoPotentialScore, engagementScore: score.engagementScore };
   });
 }
 

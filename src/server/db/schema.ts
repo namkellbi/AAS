@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS threads_posts (
   trend_state TEXT NOT NULL DEFAULT 'EMERGING',
   likes_per_hour REAL NOT NULL DEFAULT 0,
   replies_per_hour REAL NOT NULL DEFAULT 0,
-  video_potential_score INTEGER NOT NULL DEFAULT 0
+  video_potential_score INTEGER NOT NULL DEFAULT 0,
+  engagement_score INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_threads_posts_score ON threads_posts(trending_score DESC);
@@ -62,6 +63,8 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
   hashtags TEXT NOT NULL DEFAULT '[]',
   product_keywords TEXT NOT NULL DEFAULT '{}',
   video_script TEXT NOT NULL DEFAULT '{}',
+  content_goal TEXT NOT NULL DEFAULT 'affiliate',
+  matched_product_id TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY(post_id) REFERENCES threads_posts(id) ON DELETE CASCADE
 );
@@ -120,6 +123,34 @@ CREATE TABLE IF NOT EXISTS app_settings (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS api_usage_log (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_units INTEGER NOT NULL DEFAULT 0,
+  output_units INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd REAL NOT NULL DEFAULT 0,
+  related_post_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_usage_created ON api_usage_log(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS products (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  affiliate_link TEXT NOT NULL DEFAULT '',
+  price REAL NOT NULL DEFAULT 0,
+  commission_percent REAL NOT NULL DEFAULT 0,
+  category TEXT NOT NULL DEFAULT '',
+  marketplace TEXT NOT NULL DEFAULT 'tiktok_shop',
+  status TEXT NOT NULL DEFAULT 'active',
+  demo_asset_id TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS asset_library (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
@@ -145,6 +176,13 @@ CREATE TABLE IF NOT EXISTS upload_log (
   commission REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'published',
   note TEXT NOT NULL DEFAULT '',
+  content_goal TEXT NOT NULL DEFAULT 'affiliate',
+  followers_gained INTEGER NOT NULL DEFAULT 0,
+  comments INTEGER NOT NULL DEFAULT 0,
+  saves INTEGER NOT NULL DEFAULT 0,
+  shares INTEGER NOT NULL DEFAULT 0,
+  product_id TEXT,
+  variant_label TEXT NOT NULL DEFAULT '',
   FOREIGN KEY(post_id) REFERENCES threads_posts(id) ON DELETE CASCADE
 );
 `;

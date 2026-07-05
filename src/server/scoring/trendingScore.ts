@@ -51,7 +51,7 @@ const emotionCategories: Array<[string, string[]]> = [
   ['fatigue', ['sleep', 'tired', 'exhausted', 'burnout', 'drained', 'ngu', 'met', 'kiet suc']]
 ];
 
-type ScorablePost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory'>;
+type ScorablePost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory' | 'engagementScore'>;
 
 export function scorePost(post: ScorablePost): {
   score: number;
@@ -59,6 +59,7 @@ export function scorePost(post: ScorablePost): {
   opportunityScore: number;
   velocityScore: number;
   videoPotentialScore: number;
+  engagementScore: number;
   engagementGrowthPercent: number;
   emotionalCategory: string;
   breakdown: ViralScoreBreakdown;
@@ -104,6 +105,16 @@ export function scorePost(post: ScorablePost): {
   ));
   const velocityScore = trendVelocityScore(post.trendState);
   const opportunityScore = Math.round(affiliateFitScore * 0.4 + videoPotentialScore * 0.3 + velocityScore * 0.2 + score * 0.1);
+  // Engagement profile: viral + relatability + controversy + velocity. No product-fit gates, no exclusion zeroing —
+  // nurture-phase videos do not need a sellable product behind the post.
+  const engagementScore = Math.round(clamp(
+    score * 0.45 +
+      (breakdown.relatability / 11) * 20 +
+      (breakdown.controversialWording / 12) * 10 +
+      velocityScore * 0.25,
+    0,
+    100
+  ));
 
   return {
     score,
@@ -111,6 +122,7 @@ export function scorePost(post: ScorablePost): {
     opportunityScore,
     velocityScore,
     videoPotentialScore,
+    engagementScore,
     engagementGrowthPercent: 0,
     emotionalCategory: detectEmotionalCategory(text),
     breakdown,

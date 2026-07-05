@@ -10,13 +10,14 @@ import { FeedCard } from '@/components/feed/feed-card';
 import { KeywordManager } from '@/components/keywords/keyword-manager';
 import { Sidebar } from '@/components/layout/sidebar';
 import { OpportunityInbox } from '@/components/opportunities/opportunity-inbox';
+import { ProductsView } from '@/components/products/products-view';
 import { ResultsView } from '@/components/results/results-view';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { translations, type Language, type TranslationCopy } from '@/lib/i18n';
 import { formatModelPrice, openAIModelOptions, recommendedOpenAIModel } from '@/lib/openai-models';
 import { filterUsefulReplies } from '@/lib/replies';
-import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, FetchMode, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, OpportunityScanProgress, SavedPost, ServiceHealth, ThreadsPost, UpdateSettingsRequest, UploadLogEntry, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
+import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, CreateFromLinkProgress, FetchMode, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, ThreadsPost, TtsSegmentKind, UpdateSettingsRequest, UploadLogEntry, UsageSummary, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export default function HomePage() {
@@ -36,6 +37,10 @@ export default function HomePage() {
   const [isFetching, setIsFetching] = useState(false);
   const [manualPostUrl, setManualPostUrl] = useState('');
   const [isImportingPost, setIsImportingPost] = useState(false);
+  const [createLinkUrl, setCreateLinkUrl] = useState('');
+  const [isCreatingFromLink, setIsCreatingFromLink] = useState(false);
+  const [createLinkProgress, setCreateLinkProgress] = useState<CreateFromLinkProgress | null>(null);
+  const [briefInitialBackground, setBriefInitialBackground] = useState<string | undefined>(undefined);
   const [isScanning, setIsScanning] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [briefPostId, setBriefPostId] = useState<string | null>(null);
@@ -44,6 +49,8 @@ export default function HomePage() {
   const [renderedVideoPath, setRenderedVideoPath] = useState<string | null>(null);
   const [assets, setAssets] = useState<AssetLibraryItem[]>([]);
   const [uploadLogs, setUploadLogs] = useState<UploadLogEntry[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
   const [replyPost, setReplyPost] = useState<ThreadsPost | null>(null);
   const [loadingRepliesId, setLoadingRepliesId] = useState<string | null>(null);
   const [scanSummary, setScanSummary] = useState<{ newPosts: number; seenPosts: number } | null>(null);
@@ -61,6 +68,11 @@ export default function HomePage() {
   const refreshSettings = useCallback(async () => {
     const api = window.desktopAPI;
     if (api) setSettings(await api.getSettings());
+  }, []);
+
+  const refreshUsageSummary = useCallback(async () => {
+    const api = window.desktopAPI;
+    if (api) setUsageSummary(await api.getUsageSummary());
   }, []);
 
   const refreshKeywordWorkspace = useCallback(async () => {
@@ -133,12 +145,19 @@ export default function HomePage() {
 
       setError(null);
       showHealth(null);
-      const result = await api.analyzePost(post);
+      let result = await api.analyzePost(post, settings?.scanGoal ?? 'affiliate');
+      if (isQuotaBlocked(result)) {
+        if (!window.confirm(quotaMessage(copy.quotaConfirm, result))) return null;
+        const retried = await api.analyzePost(post, settings?.scanGoal ?? 'affiliate', { confirmOverQuota: true });
+        if (isQuotaBlocked(retried)) return null;
+        result = retried;
+      }
       if (result) {
         setAnalysis((current) => ({ ...current, [post.id]: result }));
         setSelectedId(post.id);
         if (post.keyword) await refreshKeywordWorkspace();
         await refreshSettings();
+        await refreshUsageSummary();
       }
       return result ?? null;
     } catch (analyzeError) {
@@ -147,7 +166,7 @@ export default function HomePage() {
     } finally {
       setAnalyzingId(null);
     }
-  }, [refreshKeywordWorkspace, refreshSettings, showHealth]);
+  }, [copy.quotaConfirm, refreshKeywordWorkspace, refreshSettings, refreshUsageSummary, settings?.scanGoal, showHealth]);
 
   const runOpportunityScan = useCallback(async () => {
     const api = window.desktopAPI;
@@ -158,12 +177,19 @@ export default function HomePage() {
     setError(null);
     showHealth(null);
     try {
-      const result = await api.scanOpportunities();
+      let result = await api.scanOpportunities(settings?.scanGoal ?? 'affiliate');
+      if (isQuotaBlocked(result)) {
+        if (!window.confirm(quotaMessage(copy.quotaConfirm, result))) return;
+        const retried = await api.scanOpportunities(settings?.scanGoal ?? 'affiliate', { confirmOverQuota: true });
+        if (isQuotaBlocked(retried)) return;
+        result = retried;
+      }
       setPosts(await api.getPosts());
       setSettings(await api.getSettings());
       setScanSummary({ newPosts: result.newPosts, seenPosts: result.seenPosts });
       setAnalysis((current) => ({ ...current, ...Object.fromEntries(result.analyses.map((item) => [item.postId, item])) }));
       await refreshKeywordWorkspace();
+      await refreshUsageSummary();
       if (result.posts[0]) setSelectedId(result.posts[0].id);
       showHealth({ ok: true, message: `${copy.scanComplete} ${result.newPosts} bài mới · ${result.seenPosts} bài đã thấy · ${result.analyzedPosts} AI brief · dọn ${result.prunedPosts} bài cũ.` });
       if (result.errors.length) setError(result.errors.join('\n'));
@@ -172,13 +198,13 @@ export default function HomePage() {
     } finally {
       setIsScanning(false);
     }
-  }, [activeKeywords.length, copy.scanComplete, isScanning, refreshKeywordWorkspace, showHealth]);
+  }, [activeKeywords.length, copy.quotaConfirm, copy.scanComplete, isScanning, refreshKeywordWorkspace, refreshUsageSummary, settings?.scanGoal, showHealth]);
 
   useEffect(() => {
     const api = window.desktopAPI;
     if (!api) return;
 
-    Promise.all([api.getPosts(), api.getAnalyses(), api.getKeywords(), api.getKeywordExclusions(), api.getKeywordInsights(), api.getSavedPosts(), api.getAssets(), api.getUploadLogs()]).then(([storedPosts, storedAnalyses, storedKeywords, storedExclusions, storedInsights, storedSaved, storedAssets, storedUploadLogs]) => {
+    Promise.all([api.getPosts(), api.getAnalyses(), api.getKeywords(), api.getKeywordExclusions(), api.getKeywordInsights(), api.getSavedPosts(), api.getAssets(), api.getUploadLogs(), api.getProducts()]).then(([storedPosts, storedAnalyses, storedKeywords, storedExclusions, storedInsights, storedSaved, storedAssets, storedUploadLogs, storedProducts]) => {
       if (storedPosts.length) {
         setPosts(storedPosts);
         setSelectedId(storedPosts[0].id);
@@ -190,8 +216,10 @@ export default function HomePage() {
       setSavedPosts(storedSaved);
       setAssets(storedAssets);
       setUploadLogs(storedUploadLogs);
+      setProducts(storedProducts);
     });
     api.getSettings().then(setSettings);
+    api.getUsageSummary().then(setUsageSummary);
   }, []);
 
   useEffect(() => {
@@ -204,6 +232,12 @@ export default function HomePage() {
     const api = window.desktopAPI;
     if (!api) return;
     return api.onOpportunityScanProgress(setScanProgress);
+  }, []);
+
+  useEffect(() => {
+    const api = window.desktopAPI;
+    if (!api) return;
+    return api.onCreateFromLinkProgress(setCreateLinkProgress);
   }, []);
 
   useEffect(() => {
@@ -304,6 +338,43 @@ export default function HomePage() {
     }
   }
 
+  async function createFromLink() {
+    const url = createLinkUrl.trim();
+    if (!url || isCreatingFromLink) return;
+    const api = window.desktopAPI;
+    if (!api) {
+      setError('Desktop API is unavailable. Run this inside Electron.');
+      return;
+    }
+
+    setIsCreatingFromLink(true);
+    setCreateLinkProgress({ phase: 'importing', percent: 5, message: copy.createFromLinkWorking });
+    setError(null);
+    showHealth(null);
+    try {
+      let result = await api.createFromLink(url);
+      if (isQuotaBlocked(result)) {
+        if (!window.confirm(quotaMessage(copy.quotaConfirm, result))) return;
+        const retried = await api.createFromLink(url, { confirmOverQuota: true });
+        if (isQuotaBlocked(retried)) return;
+        result = retried;
+      }
+      setPosts(mergePosts([result.post], await api.getPosts()));
+      setAnalysis((current) => ({ ...current, [result.post.id]: result.analysis }));
+      setSelectedId(result.post.id);
+      setCreateLinkUrl('');
+      setBriefInitialBackground(result.backgroundPath);
+      setBriefPostId(result.post.id);
+      await refreshUsageSummary();
+      showHealth({ ok: true, message: copy.createFromLinkReady });
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setIsCreatingFromLink(false);
+      setCreateLinkProgress(null);
+    }
+  }
+
   async function handleRenderVideoDraft(overrides?: Partial<VideoDraftRequest>) {
     if (!briefPost || !briefAnalysis) return;
     const api = window.desktopAPI;
@@ -324,6 +395,7 @@ export default function HomePage() {
       setError(renderError instanceof Error ? renderError.message : String(renderError));
     } finally {
       await refreshSettings();
+      await refreshUsageSummary();
       setIsRenderingVideo(false);
     }
   }
@@ -542,6 +614,13 @@ export default function HomePage() {
               isScanning={isScanning}
               scanSummary={scanSummary}
               scanProgress={scanProgress}
+              createLinkUrl={createLinkUrl}
+              isCreatingFromLink={isCreatingFromLink}
+              createLinkProgress={createLinkProgress}
+              scanGoal={settings?.scanGoal ?? 'affiliate'}
+              onScanGoal={(goal) => void saveSettings({ scanGoal: goal })}
+              onCreateLinkUrl={setCreateLinkUrl}
+              onCreateFromLink={createFromLink}
               onScan={runOpportunityScan}
               onCreate={handleGenerateTikTokIdea}
               onOpenLink={openPostLink}
@@ -571,13 +650,32 @@ export default function HomePage() {
             />
           ) : activeView === 'settings' ? (
             <SettingsView settings={settings} copy={copy} onSave={saveSettings} onSaveOpenAI={saveAndVerifyOpenAI} onLoginThreads={loginThreads} onCheckThreads={checkThreadsSession} onOpenBilling={() => window.desktopAPI?.openOpenAiBilling()} />
+          ) : activeView === 'products' ? (
+            <ProductsView
+              assets={assets}
+              copy={copy}
+              products={products}
+              onDelete={async (id): Promise<void> => {
+                await window.desktopAPI?.deleteProduct(id);
+                if (window.desktopAPI) setProducts(await window.desktopAPI.getProducts());
+              }}
+              onSave={async (product): Promise<void> => {
+                await window.desktopAPI?.saveProduct(product);
+                if (window.desktopAPI) setProducts(await window.desktopAPI.getProducts());
+              }}
+            />
           ) : activeView === 'assets' ? (
             <AssetLibraryView assets={assets} onAdd={addAsset} onDelete={deleteAsset} onPreview={(id) => window.desktopAPI?.openAssetPreview(id)} />
           ) : activeView === 'uploads' ? (
             <ResultsView
+              analyses={Object.values(analysis)}
               copy={copy}
               logs={uploadLogs}
               posts={posts}
+              products={products}
+              usage={usageSummary}
+              thresholds={settings?.readinessThresholds ?? { avgViews: 1000, engagementRatePct: 4, streakDays: 7, followersGained: 500 }}
+              onSaveThresholds={(next) => void saveSettings({ readinessThresholds: next })}
               onDelete={async (id): Promise<void> => {
                 await window.desktopAPI?.deleteUploadLog(id);
                 if (window.desktopAPI) {
@@ -624,11 +722,16 @@ export default function HomePage() {
           analysis={briefAnalysis}
           assets={assets}
           copy={copy}
+          initialBackgroundPath={briefInitialBackground}
+          matchedProduct={briefAnalysis.matchedProductId ? products.find((product) => product.id === briefAnalysis.matchedProductId) : undefined}
           post={briefPost}
           renderProgress={videoRenderProgress}
           renderedVideoPath={renderedVideoPath}
           renderingVideo={isRenderingVideo}
-          onClose={() => setBriefPostId(null)}
+          onClose={() => {
+            setBriefPostId(null);
+            setBriefInitialBackground(undefined);
+          }}
           onOpenLink={() => openPostLink(briefPost)}
           onOpenOutputFolder={handleOpenVideoOutputFolder}
           onRenderVideo={handleRenderVideoDraft}
@@ -810,10 +913,35 @@ function SettingsView({
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState(settings?.openAiModel ?? recommendedOpenAIModel);
   const [saving, setSaving] = useState(false);
+  const [ttsDrafts, setTtsDrafts] = useState<Record<TtsSegmentKind, string>>({ hook: '', post: '', reply: '', transition: '', solution: '', cta: '' });
+  const [silenceDraft, setSilenceDraft] = useState(400);
+  const [savingVoice, setSavingVoice] = useState(false);
+  const [dailyLimitDraft, setDailyLimitDraft] = useState(0);
+  const [pricingDraft, setPricingDraft] = useState({ chatInPerM: 0, chatOutPerM: 0, ttsPerMillionChars: 12, whisperPerMinute: 0.006 });
+  const [savingCosts, setSavingCosts] = useState(false);
 
   useEffect(() => {
     if (settings?.openAiModel) setModel(settings.openAiModel);
   }, [settings?.openAiModel]);
+
+  useEffect(() => {
+    if (settings?.ttsInstructions) setTtsDrafts(settings.ttsInstructions);
+    if (typeof settings?.segmentSilenceMs === 'number') setSilenceDraft(settings.segmentSilenceMs);
+  }, [settings?.ttsInstructions, settings?.segmentSilenceMs]);
+
+  useEffect(() => {
+    if (typeof settings?.dailyCostLimitUsd === 'number') setDailyLimitDraft(settings.dailyCostLimitUsd);
+    if (settings?.pricing) setPricingDraft(settings.pricing);
+  }, [settings?.dailyCostLimitUsd, settings?.pricing]);
+
+  const ttsKinds: Array<{ kind: TtsSegmentKind; label: string }> = [
+    { kind: 'hook', label: copy.ttsKindHook },
+    { kind: 'post', label: copy.ttsKindPost },
+    { kind: 'reply', label: copy.ttsKindReply },
+    { kind: 'transition', label: copy.ttsKindTransition },
+    { kind: 'solution', label: copy.ttsKindSolution },
+    { kind: 'cta', label: copy.ttsKindCta }
+  ];
 
   return (
     <div className="max-w-3xl space-y-4">
@@ -919,6 +1047,104 @@ function SettingsView({
         </div>
       </div>
 
+      <div className="rounded-lg border border-border bg-panel p-5">
+        <div className="mb-2 text-base font-semibold text-text">{copy.ttsInstructionsTitle}</div>
+        <div className="mb-4 text-sm text-muted">{copy.ttsInstructionsHelp}</div>
+        <div className="grid gap-3">
+          {ttsKinds.map(({ kind, label }) => (
+            <div key={kind}>
+              <div className="mb-1 text-xs font-medium text-muted">{label}</div>
+              <textarea
+                value={ttsDrafts[kind]}
+                onChange={(event) => setTtsDrafts((current) => ({ ...current, [kind]: event.target.value }))}
+                rows={2}
+                className="w-full rounded-md border border-border bg-[#0f1217] px-3 py-2 text-sm text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+              />
+            </div>
+          ))}
+          <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div>
+              <div className="text-sm text-text">{copy.segmentSilenceLabel}</div>
+              <div className="mt-1 text-xs text-muted">{copy.segmentSilenceHelp}</div>
+            </div>
+            <Input
+              type="number"
+              min={0}
+              max={1500}
+              step={50}
+              value={silenceDraft}
+              onChange={(event) => setSilenceDraft(Number(event.target.value))}
+              className="w-28 text-right"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div>
+              <div className="text-sm text-text">{copy.karaokeCaptions}</div>
+              <div className="mt-1 text-xs text-muted">{copy.karaokeCaptionsHelp}</div>
+            </div>
+            <button
+              aria-label={copy.karaokeCaptions}
+              onClick={() => onSave({ karaokeCaptionsEnabled: !settings?.karaokeCaptionsEnabled })}
+              className={cn('h-5 w-9 shrink-0 rounded-full p-0.5 transition', settings?.karaokeCaptionsEnabled ? 'bg-success' : 'bg-border')}
+            >
+              <span className={cn('block size-4 rounded-full bg-white transition', settings?.karaokeCaptionsEnabled ? 'translate-x-4' : 'translate-x-0')} />
+            </button>
+          </div>
+          <div>
+            <Button
+              variant="primary"
+              disabled={savingVoice}
+              onClick={async () => {
+                setSavingVoice(true);
+                await onSave({ ttsInstructions: ttsDrafts, segmentSilenceMs: silenceDraft });
+                setSavingVoice(false);
+              }}
+            >
+              {savingVoice ? copy.saving : copy.save}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-panel p-5">
+        <div className="mb-2 text-base font-semibold text-text">{copy.pricingTable}</div>
+        <div className="mb-4 text-sm text-muted">{copy.pricingTableHelp}</div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
+            {copy.dailyCostLimit}
+            <Input type="number" min={0} step={0.5} value={String(dailyLimitDraft)} onChange={(event) => setDailyLimitDraft(Math.max(0, Number(event.target.value) || 0))} />
+          </label>
+          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
+            {`Chat input ($/1M tokens · ${settings?.openAiModel ?? ''})`}
+            <Input type="number" min={0} step={0.05} value={String(pricingDraft.chatInPerM)} onChange={(event) => setPricingDraft({ ...pricingDraft, chatInPerM: Math.max(0, Number(event.target.value) || 0) })} />
+          </label>
+          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
+            {`Chat output ($/1M tokens · ${settings?.openAiModel ?? ''})`}
+            <Input type="number" min={0} step={0.05} value={String(pricingDraft.chatOutPerM)} onChange={(event) => setPricingDraft({ ...pricingDraft, chatOutPerM: Math.max(0, Number(event.target.value) || 0) })} />
+          </label>
+          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
+            TTS ($/1M chars)
+            <Input type="number" min={0} step={0.5} value={String(pricingDraft.ttsPerMillionChars)} onChange={(event) => setPricingDraft({ ...pricingDraft, ttsPerMillionChars: Math.max(0, Number(event.target.value) || 0) })} />
+          </label>
+          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
+            Whisper ($/phút)
+            <Input type="number" min={0} step={0.001} value={String(pricingDraft.whisperPerMinute)} onChange={(event) => setPricingDraft({ ...pricingDraft, whisperPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
+          </label>
+        </div>
+        <Button
+          className="mt-4"
+          variant="primary"
+          disabled={savingCosts}
+          onClick={async () => {
+            setSavingCosts(true);
+            await onSave({ dailyCostLimitUsd: dailyLimitDraft, pricing: pricingDraft });
+            setSavingCosts(false);
+          }}
+        >
+          {savingCosts ? copy.saving : copy.save}
+        </Button>
+      </div>
+
     </div>
   );
 }
@@ -996,6 +1222,14 @@ function RepliesDrawer({ post, loading, onClose, onReload }: { post: ThreadsPost
   return <aside className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-x-hidden overflow-y-auto border-l border-border bg-[#0c0f13] p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between gap-3"><div className="min-w-0"><div className="text-xs uppercase tracking-[0.14em] text-muted">Top replies ({replies.length})</div><div className="mt-1 truncate text-base font-semibold text-text">{post.author}</div></div><Button className="shrink-0 px-2" icon={<X className="size-4" />} onClick={onClose} /></div><div className="mb-4"><Button disabled={loading} icon={<RefreshCcw className={cn('size-4', loading && 'animate-spin')} />} onClick={onReload}>{loading ? 'Đang tải replies...' : 'Tải lại replies'}</Button></div><div className="space-y-3">{replies.map((reply) => <div key={reply.id} className="min-w-0 overflow-hidden rounded-lg border border-border bg-panel p-3"><div className="break-all text-xs font-semibold text-sky-200">@{reply.author}</div><div className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300 [overflow-wrap:anywhere]">{reply.content}</div><div className="mt-2 text-xs text-muted">{reply.likes} likes</div></div>)}{!replies.length ? <div className="text-sm text-muted">Chưa tải được nội dung replies cho bài này.</div> : null}</div></aside>;
 }
 
+function isQuotaBlocked(result: unknown): result is QuotaBlockedResult {
+  return typeof result === 'object' && result !== null && 'quotaExceeded' in result;
+}
+
+function quotaMessage(template: string, quota: QuotaBlockedResult) {
+  return `${template} ($${quota.todayUsd.toFixed(2)} / $${quota.limitUsd.toFixed(2)})`;
+}
+
 function mergePosts(incoming: ThreadsPost[], current: ThreadsPost[]) {
   const map = new Map<string, ThreadsPost>();
   for (const post of [...current, ...incoming]) {
@@ -1014,6 +1248,8 @@ function titleForView(view: string, copy: TranslationCopy) {
       return copy.keywords;
     case 'saved':
       return copy.savedPosts;
+    case 'products':
+      return copy.products;
     case 'assets':
       return 'Kho clip';
     case 'uploads':
@@ -1031,6 +1267,7 @@ function sectionLabelForView(view: string) {
     trending: 'Research',
     keywords: 'Sources',
     saved: 'Library',
+    products: 'Catalog',
     assets: 'Assets',
     uploads: 'Performance',
     settings: 'Settings'

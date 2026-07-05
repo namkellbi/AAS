@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import type { KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordSuggestion } from '@/lib/types';
-import { getAffiliatePerformanceContext, getOpenAiApiKey, getOpenAiModel, listAnalyses, listKeywordExclusions, listPosts } from '@/server/db/client';
+import { getAffiliatePerformanceContext, getOpenAiApiKey, getOpenAiModel, listAnalyses, listKeywordExclusions, listPosts, logApiUsage } from '@/server/db/client';
 import { withRetry } from '@/server/utils/withRetry';
 
 export async function discoverAffiliateKeywords(request: KeywordDiscoveryRequest): Promise<KeywordDiscoveryResult> {
@@ -62,6 +62,9 @@ Quy tắc:
     })
   );
 
+  if (response.usage) {
+    logApiUsage({ kind: 'keyword_discovery', model: getOpenAiModel(), inputUnits: response.usage.prompt_tokens, outputUnits: response.usage.completion_tokens });
+  }
   const parsed = JSON.parse(response.choices[0]?.message?.content ?? '{}') as Record<string, unknown>;
   const items = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
   const existingSet = new Set(request.existingKeywords.map((item) => item.trim().toLowerCase()));

@@ -207,7 +207,70 @@ type TranslationKey =
   | 'sourceManual'
   | 'sourceDefault'
   | 'sourceAiAudience'
-  | 'sourceAiExpansion';
+  | 'sourceAiExpansion'
+  | 'ttsInstructionsTitle'
+  | 'ttsInstructionsHelp'
+  | 'ttsKindHook'
+  | 'ttsKindPost'
+  | 'ttsKindReply'
+  | 'ttsKindTransition'
+  | 'ttsKindSolution'
+  | 'ttsKindCta'
+  | 'segmentSilenceLabel'
+  | 'segmentSilenceHelp'
+  | 'createFromLinkTitle'
+  | 'createFromLinkHelp'
+  | 'createFromLink'
+  | 'createFromLinkWorking'
+  | 'createFromLinkReady'
+  | 'karaokeCaptions'
+  | 'karaokeCaptionsHelp'
+  | 'scanGoalAffiliate'
+  | 'scanGoalEngagement'
+  | 'scanGoalHelp'
+  | 'channelReadiness'
+  | 'readinessHelp'
+  | 'avgRecentViews'
+  | 'engagementRate'
+  | 'postingStreak'
+  | 'followersGained'
+  | 'readyForAffiliate'
+  | 'contentGoal'
+  | 'goalEngagement'
+  | 'goalAffiliate'
+  | 'commentsMetric'
+  | 'savesMetric'
+  | 'sharesMetric'
+  | 'contentMix'
+  | 'products'
+  | 'productsHelp'
+  | 'addProduct'
+  | 'editProduct'
+  | 'productNameLabel'
+  | 'affiliateLink'
+  | 'priceLabel'
+  | 'commissionPercent'
+  | 'categoryLabel'
+  | 'marketplaceLabel'
+  | 'productStatusActive'
+  | 'productStatusPaused'
+  | 'demoClip'
+  | 'productNotes'
+  | 'noProducts'
+  | 'matchedProduct'
+  | 'chooseProduct'
+  | 'variantsTitle'
+  | 'variantsHelp'
+  | 'addVariant'
+  | 'variantLabelField'
+  | 'costPerDraft'
+  | 'commissionPerVideo'
+  | 'makeNowPostedRate'
+  | 'todayApiCost'
+  | 'dailyCostLimit'
+  | 'quotaConfirm'
+  | 'pricingTable'
+  | 'pricingTableHelp';
 
 export type TranslationCopy = Record<TranslationKey, string>;
 
@@ -419,7 +482,70 @@ export const translations: Record<Language, TranslationCopy> = {
     sourceManual: 'Manual',
     sourceDefault: 'Starter',
     sourceAiAudience: 'AI Audience',
-    sourceAiExpansion: 'AI Expansion'
+    sourceAiExpansion: 'AI Expansion',
+    ttsInstructionsTitle: 'Voice style (TTS)',
+    ttsInstructionsHelp: 'How the AI voice should read each video segment. Leave a field empty to use the default style.',
+    ttsKindHook: 'Hook',
+    ttsKindPost: 'Post story',
+    ttsKindReply: 'Replies',
+    ttsKindTransition: 'Transition',
+    ttsKindSolution: 'Solution',
+    ttsKindCta: 'CTA / Outro',
+    segmentSilenceLabel: 'Pause between segments (ms)',
+    segmentSilenceHelp: 'Silence inserted after each voice segment so the video breathes naturally. Default 400ms.',
+    createFromLinkTitle: 'Create video from a Threads link',
+    createFromLinkHelp: 'Paste a Threads post link. The app imports it, runs AI analysis and opens the video brief ready to render.',
+    createFromLink: 'Create from link',
+    createFromLinkWorking: 'Preparing brief...',
+    createFromLinkReady: 'Brief is ready. Review it and hit render.',
+    karaokeCaptions: 'Karaoke captions',
+    karaokeCaptionsHelp: 'Burn word-synced karaoke captions into the video (needs an FFmpeg build with libass).',
+    scanGoalAffiliate: 'Affiliate',
+    scanGoalEngagement: 'Engagement',
+    scanGoalHelp: 'Affiliate: find posts that map to sellable products. Engagement: find relatable stories to grow the channel — no product required.',
+    channelReadiness: 'Channel readiness',
+    readinessHelp: 'Nurture-phase progress from your upload log. When every target passes, the channel is ready to switch on the affiliate flow.',
+    avgRecentViews: 'Avg views (last 10)',
+    engagementRate: 'Engagement rate',
+    postingStreak: 'Posting streak (days)',
+    followersGained: 'Followers gained',
+    readyForAffiliate: 'Ready for affiliate',
+    contentGoal: 'Content goal',
+    goalEngagement: 'Engagement',
+    goalAffiliate: 'Affiliate',
+    commentsMetric: 'Comments',
+    savesMetric: 'Saves',
+    sharesMetric: 'Shares',
+    contentMix: 'Content mix (last 10)',
+    products: 'Products',
+    productsHelp: 'Your approved offer catalog. Every affiliate video should map to a real product here — AI matching only picks from this list.',
+    addProduct: 'Add product',
+    editProduct: 'Edit product',
+    productNameLabel: 'Product name',
+    affiliateLink: 'Affiliate link',
+    priceLabel: 'Price (VND)',
+    commissionPercent: 'Commission (%)',
+    categoryLabel: 'Category',
+    marketplaceLabel: 'Marketplace',
+    productStatusActive: 'Active',
+    productStatusPaused: 'Paused',
+    demoClip: 'Demo clip',
+    productNotes: 'Notes',
+    noProducts: 'No products yet. Add the offers you are approved to promote.',
+    matchedProduct: 'Matched product',
+    chooseProduct: 'Link a catalog product...',
+    variantsTitle: 'Variants (A/B)',
+    variantsHelp: 'Render up to 2 extra versions that only change the hook and CTA. Middle segments are reused, so extra cost is minimal. Post them across different days to find the winner.',
+    addVariant: 'Add variant',
+    variantLabelField: 'Variant label',
+    costPerDraft: 'Cost per draft (30d)',
+    commissionPerVideo: 'Commission per video',
+    makeNowPostedRate: 'Make-now → posted',
+    todayApiCost: "Today's API cost",
+    dailyCostLimit: 'Daily API cost limit (USD, 0 = off)',
+    quotaConfirm: 'Daily API cost limit reached. Continue anyway?',
+    pricingTable: 'API costs & quota',
+    pricingTableHelp: 'Prices used to estimate spend per call. Update them when OpenAI pricing changes. The daily limit asks for confirmation before scans/analyses once exceeded.'
   },
   vi: {
     opportunityInbox: 'Cơ hội hôm nay',
@@ -628,6 +754,69 @@ export const translations: Record<Language, TranslationCopy> = {
     sourceManual: 'Thủ công',
     sourceDefault: 'Khởi tạo',
     sourceAiAudience: 'AI theo audience',
-    sourceAiExpansion: 'AI mở rộng'
+    sourceAiExpansion: 'AI mở rộng',
+    ttsInstructionsTitle: 'Phong cách giọng đọc (TTS)',
+    ttsInstructionsHelp: 'Cách giọng AI đọc từng phần của video. Để trống ô nào thì dùng phong cách mặc định cho ô đó.',
+    ttsKindHook: 'Hook mở đầu',
+    ttsKindPost: 'Bài post',
+    ttsKindReply: 'Replies',
+    ttsKindTransition: 'Chuyển đoạn',
+    ttsKindSolution: 'Giải pháp',
+    ttsKindCta: 'CTA / Kết',
+    segmentSilenceLabel: 'Khoảng lặng giữa các đoạn (ms)',
+    segmentSilenceHelp: 'Chèn im lặng sau mỗi đoạn giọng đọc để video có nhịp thở tự nhiên. Mặc định 400ms.',
+    createFromLinkTitle: 'Tạo video từ link Threads',
+    createFromLinkHelp: 'Paste link bài Threads. Tool tự nhập bài, chạy AI phân tích và mở sẵn brief video để bấm render.',
+    createFromLink: 'Tạo từ link',
+    createFromLinkWorking: 'Đang chuẩn bị brief...',
+    createFromLinkReady: 'Brief đã sẵn sàng. Xem lại và bấm render.',
+    karaokeCaptions: 'Karaoke caption',
+    karaokeCaptionsHelp: 'Burn phụ đề karaoke chạy theo từng chữ vào video (cần bản FFmpeg có libass).',
+    scanGoalAffiliate: 'Affiliate',
+    scanGoalEngagement: 'Engagement',
+    scanGoalHelp: 'Affiliate: tìm bài gắn được sản phẩm bán. Engagement: tìm câu chuyện dễ đồng cảm để nuôi kênh — không cần sản phẩm.',
+    channelReadiness: 'Độ sẵn sàng của kênh',
+    readinessHelp: 'Tiến độ giai đoạn nuôi kênh tính từ upload log. Khi mọi chỉ tiêu đạt, kênh sẵn sàng bật flow affiliate.',
+    avgRecentViews: 'View trung bình (10 video)',
+    engagementRate: 'Tỷ lệ tương tác',
+    postingStreak: 'Chuỗi ngày đăng',
+    followersGained: 'Follower tăng thêm',
+    readyForAffiliate: 'Sẵn sàng bật affiliate',
+    contentGoal: 'Mục tiêu nội dung',
+    goalEngagement: 'Engagement',
+    goalAffiliate: 'Affiliate',
+    commentsMetric: 'Comment',
+    savesMetric: 'Lượt lưu',
+    sharesMetric: 'Lượt share',
+    contentMix: 'Tỷ lệ nội dung (10 video)',
+    products: 'Sản phẩm',
+    productsHelp: 'Catalog offer đã duyệt. Mọi video affiliate nên gắn với một sản phẩm thật ở đây — AI chỉ được match từ danh sách này.',
+    addProduct: 'Thêm sản phẩm',
+    editProduct: 'Sửa sản phẩm',
+    productNameLabel: 'Tên sản phẩm',
+    affiliateLink: 'Link affiliate',
+    priceLabel: 'Giá (VND)',
+    commissionPercent: 'Hoa hồng (%)',
+    categoryLabel: 'Danh mục',
+    marketplaceLabel: 'Sàn',
+    productStatusActive: 'Đang chạy',
+    productStatusPaused: 'Tạm dừng',
+    demoClip: 'Clip demo',
+    productNotes: 'Ghi chú',
+    noProducts: 'Chưa có sản phẩm. Thêm các offer bạn được duyệt để quảng bá.',
+    matchedProduct: 'Sản phẩm khớp',
+    chooseProduct: 'Gắn sản phẩm từ catalog...',
+    variantsTitle: 'Variants (A/B)',
+    variantsHelp: 'Render thêm tối đa 2 bản chỉ khác hook và CTA. Các segment giữa được tái sử dụng nên chi phí gần như không đổi. Đăng dải nhiều ngày để tìm bản thắng.',
+    addVariant: 'Thêm variant',
+    variantLabelField: 'Nhãn variant',
+    costPerDraft: 'Chi phí mỗi draft (30 ngày)',
+    commissionPerVideo: 'Hoa hồng mỗi video',
+    makeNowPostedRate: 'Make-now → đã đăng',
+    todayApiCost: 'Chi phí API hôm nay',
+    dailyCostLimit: 'Ngưỡng chi phí API/ngày (USD, 0 = tắt)',
+    quotaConfirm: 'Đã chạm ngưỡng chi phí API hôm nay. Vẫn tiếp tục?',
+    pricingTable: 'Chi phí API & hạn mức',
+    pricingTableHelp: 'Bảng giá dùng để ước tính chi phí mỗi lần gọi. Cập nhật khi OpenAI đổi giá. Vượt ngưỡng ngày thì scan/analyze sẽ hỏi xác nhận trước khi chạy.'
   }
 };

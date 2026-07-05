@@ -5,13 +5,19 @@ const api: DesktopAPI = {
   fetchThreads: (request: FetchRequest) => ipcRenderer.invoke('threads:fetch', request),
   importThreadsPost: (url: string) => ipcRenderer.invoke('threads:import-post', url),
   fetchPostReplies: (post: ThreadsPost) => ipcRenderer.invoke('threads:fetch-post-replies', post),
-  scanOpportunities: () => ipcRenderer.invoke('opportunities:scan'),
+  scanOpportunities: (goal, options) => ipcRenderer.invoke('opportunities:scan', goal, options),
   onOpportunityScanProgress: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof listener>[0]) => listener(progress);
     ipcRenderer.on('opportunities:scan-progress', handler);
     return () => ipcRenderer.removeListener('opportunities:scan-progress', handler);
   },
-  analyzePost: (post: ThreadsPost) => ipcRenderer.invoke('ai:analyze-post', post),
+  createFromLink: (url: string, options) => ipcRenderer.invoke('workflow:create-from-link', url, options),
+  onCreateFromLinkProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof listener>[0]) => listener(progress);
+    ipcRenderer.on('workflow:create-from-link-progress', handler);
+    return () => ipcRenderer.removeListener('workflow:create-from-link-progress', handler);
+  },
+  analyzePost: (post: ThreadsPost, goal, options) => ipcRenderer.invoke('ai:analyze-post', post, goal, options),
   getPosts: () => ipcRenderer.invoke('posts:list'),
   getAnalysis: (postId: string) => ipcRenderer.invoke('analysis:get', postId),
   getAnalyses: () => ipcRenderer.invoke('analysis:list'),
@@ -49,7 +55,11 @@ const api: DesktopAPI = {
   openAssetPreview: (id) => ipcRenderer.invoke('assets:open-preview', id),
   getUploadLogs: () => ipcRenderer.invoke('upload-log:list'),
   saveUploadLog: (entry) => ipcRenderer.invoke('upload-log:save', entry),
-  deleteUploadLog: (id) => ipcRenderer.invoke('upload-log:delete', id)
+  deleteUploadLog: (id) => ipcRenderer.invoke('upload-log:delete', id),
+  getProducts: () => ipcRenderer.invoke('products:list'),
+  saveProduct: (product) => ipcRenderer.invoke('products:save', product),
+  deleteProduct: (id) => ipcRenderer.invoke('products:delete', id),
+  getUsageSummary: () => ipcRenderer.invoke('usage:summary')
 };
 
 contextBridge.exposeInMainWorld('desktopAPI', api);

@@ -6,36 +6,46 @@ import { discoverAffiliateKeywords } from '@/server/ai/keywordIntelligenceServic
 import {
   addKeywordExclusion,
   addKeyword,
+  checkDailyQuota,
   deleteKeywordExclusion,
   deleteKeyword,
+  deleteProduct,
   deleteUploadLog,
   getAnalysis,
   getAppSettings,
   getAsset,
   getDb,
+  getProduct,
+  getUsageSummary,
   listKeywords,
   listKeywordExclusions,
   listKeywordInsights,
   listAnalyses,
   listPosts,
+  listProducts,
   listSavedPosts,
   listUploadLogs,
   markAssetUsed,
   savePost,
+  saveProduct,
   saveUploadLog,
   unsavePost,
   setOpenAiApiKey,
+  setReadinessThresholds,
   setSetting,
   setKeywordEnabled,
+  setTtsInstructions,
   updateKeyword,
+  updatePricing,
 } from '@/server/db/client';
 import { exportSavedIdeas } from '@/server/services/exportService';
+import { createVideoFromLink } from '@/server/services/createFromLinkService';
 import { fetchAndStoreThreads, importAndStoreThreadsPost, refreshPostReplies } from '@/server/services/fetchService';
 import { scanOpportunityInbox } from '@/server/services/opportunityScanService';
 import { getThreadsLoginStatus, openThreadsLoginSession } from '@/server/scraper/threadsScraper';
 import { renderVideoDraft } from '@/server/video/videoDraftService';
 import { deleteRegisteredAsset, listAssetsWithThumbnails, registerAsset } from '@/server/services/assetLibraryService';
-import type { AssetType, FetchRequest, KeywordDiscoveryRequest, ThreadsPost, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
+import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, Product, QuotaBlockedResult, ThreadsPost, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
 
 const isDev = !app.isPackaged;
 const shouldOpenDevTools = process.env.OPEN_DEVTOOLS === '1';
@@ -78,9 +88,22 @@ function registerIpc() {
   ipcMain.handle('threads:fetch', async (_event, request: FetchRequest) => fetchAndStoreThreads(request));
   ipcMain.handle('threads:import-post', async (_event, url: string) => importAndStoreThreadsPost(url));
   ipcMain.handle('threads:fetch-post-replies', async (_event, post: ThreadsPost) => refreshPostReplies(post));
-  ipcMain.handle('opportunities:scan', async (_event) => scanOpportunityInbox((progress) => _event.sender.send('opportunities:scan-progress', progress)));
+  ipcMain.handle('opportunities:scan', async (_event, goal?: ContentGoal, options?: { confirmOverQuota?: boolean }) => {
+    const blocked = quotaBlock(options);
+    if (blocked) return blocked;
+    return scanOpportunityInbox((progress) => _event.sender.send('opportunities:scan-progress', progress), goal === 'engagement' ? 'engagement' : 'affiliate');
+  });
+  ipcMain.handle('workflow:create-from-link', async (_event, url: string, options?: { confirmOverQuota?: boolean }) => {
+    const blocked = quotaBlock(options);
+    if (blocked) return blocked;
+    return createVideoFromLink(url, (progress) => _event.sender.send('workflow:create-from-link-progress', progress));
+  });
   ipcMain.handle('threads:login', async () => openThreadsLoginSession());
-  ipcMain.handle('ai:analyze-post', async (_event, post: ThreadsPost) => analyzeAffiliateOpportunity(post));
+  ipcMain.handle('ai:analyze-post', async (_event, post: ThreadsPost, goal?: ContentGoal, options?: { confirmOverQuota?: boolean }) => {
+    const blocked = quotaBlock(options);
+    if (blocked) return blocked;
+    return analyzeAffiliateOpportunity(post, goal === 'engagement' ? 'engagement' : 'affiliate');
+  });
   ipcMain.handle('posts:list', async () => listPosts());
   ipcMain.handle('analysis:get', async (_event, postId: string) => getAnalysis(postId));
   ipcMain.handle('analysis:list', async () => listAnalyses());
@@ -112,6 +135,13 @@ function registerIpc() {
     if (typeof settings.defaultSpeed === 'number' && settings.defaultSpeed >= 0.9 && settings.defaultSpeed <= 1.3) setSetting('video.default_speed', String(settings.defaultSpeed));
     if (typeof settings.transitionSoundEnabled === 'boolean') setSetting('video.transition_sound_enabled', String(settings.transitionSoundEnabled));
     if (typeof settings.postAgeHours === 'number' && settings.postAgeHours >= 1) setSetting('scraper.post_age_hours', String(Math.round(settings.postAgeHours)));
+    if (settings.ttsInstructions && typeof settings.ttsInstructions === 'object') setTtsInstructions(settings.ttsInstructions);
+    if (typeof settings.segmentSilenceMs === 'number' && Number.isFinite(settings.segmentSilenceMs)) setSetting('video.segment_silence_ms', String(Math.round(Math.min(Math.max(settings.segmentSilenceMs, 0), 1500))));
+    if (typeof settings.karaokeCaptionsEnabled === 'boolean') setSetting('video.karaoke_captions_enabled', String(settings.karaokeCaptionsEnabled));
+    if (settings.scanGoal === 'engagement' || settings.scanGoal === 'affiliate') setSetting('app.scan_goal', settings.scanGoal);
+    if (settings.readinessThresholds && typeof settings.readinessThresholds === 'object') setReadinessThresholds(settings.readinessThresholds);
+    if (typeof settings.dailyCostLimitUsd === 'number' && Number.isFinite(settings.dailyCostLimitUsd) && settings.dailyCostLimitUsd >= 0) setSetting('costs.daily_limit_usd', String(settings.dailyCostLimitUsd));
+    if (settings.pricing && typeof settings.pricing === 'object') updatePricing(settings.pricing);
     return getAppSettings();
   });
   ipcMain.handle('ai:test', async () => testOpenAIConnection());
@@ -134,9 +164,14 @@ function registerIpc() {
     const backgroundPath = request.backgroundPath || await pickVideoFile('Select an authorized retention background clip');
     if (!backgroundPath) return { ok: false, message: 'Video draft cancelled before selecting the background clip.' };
     sendProgress(12, 'Chuẩn bị clip demo sản phẩm nếu có...');
-    const demoPath = request.productClipPath;
+    const matchedProduct = request.analysis.matchedProductId ? getProduct(request.analysis.matchedProductId) : null;
+    let demoPath = request.productClipPath;
+    if (!demoPath && matchedProduct?.demoAssetId) {
+      const demoAsset = getAsset(matchedProduct.demoAssetId);
+      if (demoAsset) demoPath = demoAsset.filePath;
+    }
 
-    const result = await renderVideoDraft({ ...request, backgroundPath, demoPath }, (progress) => _event.sender.send('video:render-progress', progress));
+    const result = await renderVideoDraft({ ...request, backgroundPath, demoPath, product: matchedProduct ?? undefined }, (progress) => _event.sender.send('video:render-progress', progress));
     markAssetUsed(backgroundPath);
     markAssetUsed(demoPath);
     return result;
@@ -163,6 +198,16 @@ function registerIpc() {
   ipcMain.handle('upload-log:list', async () => listUploadLogs());
   ipcMain.handle('upload-log:save', async (_event, entry: UploadLogEntry) => saveUploadLog(entry));
   ipcMain.handle('upload-log:delete', async (_event, id: string) => deleteUploadLog(id));
+  ipcMain.handle('products:list', async () => listProducts());
+  ipcMain.handle('products:save', async (_event, product: Product) => saveProduct(product));
+  ipcMain.handle('products:delete', async (_event, id: string) => deleteProduct(id));
+  ipcMain.handle('usage:summary', async () => getUsageSummary());
+}
+
+function quotaBlock(options?: { confirmOverQuota?: boolean }): QuotaBlockedResult | null {
+  if (options?.confirmOverQuota) return null;
+  const quota = checkDailyQuota();
+  return quota.exceeded ? { quotaExceeded: true, todayUsd: quota.todayUsd, limitUsd: quota.limitUsd } : null;
 }
 
 app.whenReady().then(() => {
