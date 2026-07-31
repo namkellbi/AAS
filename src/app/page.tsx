@@ -3,9 +3,10 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, ExternalLink, Filter, FolderOpen, Link2, LogIn, Play, RefreshCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { ChevronDown, ExternalLink, Filter, FolderOpen, Link2, LoaderCircle, LogIn, Play, RefreshCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, Volume2, X } from 'lucide-react';
 import { AnalysisPanel } from '@/components/analysis/analysis-panel';
 import { TikTokBriefModal } from '@/components/analysis/tiktok-brief-modal';
+import { CreateVideoHome } from '@/components/create-video/create-video-home';
 import { FeedCard } from '@/components/feed/feed-card';
 import { KeywordManager } from '@/components/keywords/keyword-manager';
 import { Sidebar } from '@/components/layout/sidebar';
@@ -14,10 +15,12 @@ import { ProductsView } from '@/components/products/products-view';
 import { ResultsView } from '@/components/results/results-view';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { defaultFeatureVisibility } from '@/lib/content-mode';
 import { translations, type Language, type TranslationCopy } from '@/lib/i18n';
 import { formatModelPrice, openAIModelOptions, recommendedOpenAIModel } from '@/lib/openai-models';
 import { filterUsefulReplies } from '@/lib/replies';
-import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, CreateFromLinkProgress, FetchMode, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, ThreadsPost, TtsSegmentKind, UpdateSettingsRequest, UploadLogEntry, UsageSummary, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
+import { getDefaultVoiceForProvider, getTtsModel, getTtsVoiceOptions, isTtsVoiceForProvider, openAiTtsVoiceOptions } from '@/lib/tts';
+import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, CreateFromLinkProgress, FetchMode, GeneratedVideoItem, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, LocalTtsStatus, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, ThreadsPost, TtsProvider, TtsSegmentKind, TtsVoice, UpdateSettingsRequest, UploadLogEntry, UsageSummary, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export default function HomePage() {
@@ -48,6 +51,7 @@ export default function HomePage() {
   const [videoRenderProgress, setVideoRenderProgress] = useState<VideoDraftProgress | null>(null);
   const [renderedVideoPath, setRenderedVideoPath] = useState<string | null>(null);
   const [assets, setAssets] = useState<AssetLibraryItem[]>([]);
+  const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideoItem[]>([]);
   const [uploadLogs, setUploadLogs] = useState<UploadLogEntry[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
@@ -60,6 +64,7 @@ export default function HomePage() {
   const scannedOnLaunch = useRef(false);
   const language = settings?.language ?? 'en';
   const copy = translations[language];
+  const featureVisibility = settings?.featureVisibility ?? defaultFeatureVisibility;
 
   const showHealth = useCallback((message: ServiceHealth | null) => {
     setHealth(message);
@@ -94,8 +99,8 @@ export default function HomePage() {
   const briefAnalysis = briefPost ? analysis[briefPost.id] : undefined;
   const savedIds = useMemo(() => new Set(savedPosts.map((item) => item.postId)), [savedPosts]);
   const activeKeywords = keywords.filter((keyword) => keyword.enabled);
-  const shouldShowFeedTools = activeView === 'trending' || activeView === 'saved';
-  const shouldShowAnalysisPanel = activeView === 'trending' || activeView === 'saved';
+  const shouldShowFeedTools = featureVisibility.opportunityDiscovery && (activeView === 'trending' || activeView === 'saved');
+  const shouldShowAnalysisPanel = featureVisibility.opportunityDiscovery && (activeView === 'trending' || activeView === 'saved');
 
   const visiblePosts = useMemo(() => {
     const filtered =
@@ -224,6 +229,12 @@ export default function HomePage() {
 
   useEffect(() => {
     const api = window.desktopAPI;
+    if (!api || activeView !== 'assets') return;
+    void api.getGeneratedVideos().then(setGeneratedVideos);
+  }, [activeView]);
+
+  useEffect(() => {
+    const api = window.desktopAPI;
     if (!api) return;
     return api.onVideoDraftProgress(setVideoRenderProgress);
   }, []);
@@ -264,16 +275,21 @@ export default function HomePage() {
   }, [handleAnalyze, selectedPost]);
 
   useEffect(() => {
-    if (!settings?.autoScanEnabled) return;
+    if (!featureVisibility.opportunityDiscovery || !settings?.autoScanEnabled) return;
     const timer = window.setInterval(() => void runOpportunityScan(), settings.autoScanMinutes * 60_000);
     return () => window.clearInterval(timer);
-  }, [runOpportunityScan, settings?.autoScanEnabled, settings?.autoScanMinutes]);
+  }, [featureVisibility.opportunityDiscovery, runOpportunityScan, settings?.autoScanEnabled, settings?.autoScanMinutes]);
 
   useEffect(() => {
-    if (!settings?.scanOnLaunch || scannedOnLaunch.current) return;
+    if (!featureVisibility.opportunityDiscovery || !settings?.scanOnLaunch || scannedOnLaunch.current) return;
     scannedOnLaunch.current = true;
     void runOpportunityScan();
-  }, [runOpportunityScan, settings?.scanOnLaunch]);
+  }, [featureVisibility.opportunityDiscovery, runOpportunityScan, settings?.scanOnLaunch]);
+
+  useEffect(() => {
+    if (isViewEnabled(activeView, featureVisibility)) return;
+    setActiveView('home');
+  }, [activeView, featureVisibility]);
 
   async function handleSave(post: ThreadsPost) {
     const api = window.desktopAPI;
@@ -548,6 +564,13 @@ export default function HomePage() {
     if (window.desktopAPI) setSettings(await window.desktopAPI.getSettings());
   }
 
+  async function saveAndVerifyGemini(next: { geminiApiKey?: string }) {
+    await saveSettings(next);
+    const result = await window.desktopAPI?.testGemini();
+    if (result) showHealth(result);
+    if (window.desktopAPI) setSettings(await window.desktopAPI.getSettings());
+  }
+
   async function checkThreadsSession() {
     const result = await window.desktopAPI?.getThreadsLoginStatus();
     if (result) showHealth(result);
@@ -573,7 +596,7 @@ export default function HomePage() {
 
   return (
     <main className="flex h-screen overflow-hidden bg-background text-text">
-      <Sidebar active={activeView} onChange={changeView} copy={copy} />
+      <Sidebar active={activeView} features={featureVisibility} language={language} onChange={changeView} copy={copy} />
 
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex min-h-20 items-center justify-between gap-4 border-b border-border bg-background/95 px-5">
@@ -605,6 +628,23 @@ export default function HomePage() {
           ) : null}
 
           {activeView === 'home' ? (
+            <CreateVideoHome
+              copy={copy}
+              createLinkProgress={createLinkProgress}
+              createLinkUrl={createLinkUrl}
+              creativeAiEnabled={settings?.creativeAiEnabled ?? false}
+              isCreatingFromLink={isCreatingFromLink}
+              language={language}
+              openAiReady={Boolean(settings?.openAiApiKeySet)}
+              posts={posts}
+              threadsReady={Boolean(settings?.threadsSessionExists)}
+              onCreateFromLink={createFromLink}
+              onCreateLinkUrl={setCreateLinkUrl}
+              onNavigateSettings={() => changeView('settings')}
+              onOpenDraft={handleGenerateTikTokIdea}
+              onOpenLink={openPostLink}
+            />
+          ) : activeView === 'opportunities' ? (
             <OpportunityInbox
               copy={copy}
               posts={posts}
@@ -618,6 +658,13 @@ export default function HomePage() {
               isCreatingFromLink={isCreatingFromLink}
               createLinkProgress={createLinkProgress}
               scanGoal={settings?.scanGoal ?? 'affiliate'}
+              setup={{
+                apiKey: Boolean(settings?.openAiApiKeySet),
+                threadsLogin: Boolean(settings?.threadsSessionExists),
+                background: assets.some((asset) => asset.type === 'background'),
+                keywords: keywords.some((keyword) => keyword.enabled)
+              }}
+              onNavigate={changeView}
               onScanGoal={(goal) => void saveSettings({ scanGoal: goal })}
               onCreateLinkUrl={setCreateLinkUrl}
               onCreateFromLink={createFromLink}
@@ -649,7 +696,17 @@ export default function HomePage() {
               onDeleteKeyword={deleteKeyword}
             />
           ) : activeView === 'settings' ? (
-            <SettingsView settings={settings} copy={copy} onSave={saveSettings} onSaveOpenAI={saveAndVerifyOpenAI} onLoginThreads={loginThreads} onCheckThreads={checkThreadsSession} onOpenBilling={() => window.desktopAPI?.openOpenAiBilling()} />
+            <SettingsView
+              settings={settings}
+              copy={copy}
+              onSave={saveSettings}
+              onSaveOpenAI={saveAndVerifyOpenAI}
+              onSaveGemini={saveAndVerifyGemini}
+              onLoginThreads={loginThreads}
+              onCheckThreads={checkThreadsSession}
+              onOpenBilling={() => window.desktopAPI?.openOpenAiBilling()}
+              onOpenGeminiApiKeys={() => window.desktopAPI?.openGeminiApiKeys()}
+            />
           ) : activeView === 'products' ? (
             <ProductsView
               assets={assets}
@@ -665,7 +722,19 @@ export default function HomePage() {
               }}
             />
           ) : activeView === 'assets' ? (
-            <AssetLibraryView assets={assets} onAdd={addAsset} onDelete={deleteAsset} onPreview={(id) => window.desktopAPI?.openAssetPreview(id)} />
+            <AssetLibraryView
+              assets={assets}
+              generatedVideos={generatedVideos}
+              showProductClips={featureVisibility.affiliateWorkspace}
+              onAdd={addAsset}
+              onDelete={deleteAsset}
+              onDeleteGenerated={async (filePath) => {
+                await window.desktopAPI?.deleteGeneratedVideo(filePath);
+                if (window.desktopAPI) setGeneratedVideos(await window.desktopAPI.getGeneratedVideos());
+              }}
+              onOpenGenerated={(filePath) => window.desktopAPI?.openGeneratedVideo(filePath)}
+              onPreview={(id) => window.desktopAPI?.openAssetPreview(id)}
+            />
           ) : activeView === 'uploads' ? (
             <ResultsView
               analyses={Object.values(analysis)}
@@ -715,13 +784,14 @@ export default function HomePage() {
         </section>
       </section>
 
-      {shouldShowAnalysisPanel ? <AnalysisPanel post={selectedPost} analysis={selectedAnalysis} copy={copy} /> : null}
+      {shouldShowAnalysisPanel ? <AnalysisPanel post={selectedPost} analysis={selectedAnalysis} copy={copy} creativeAiEnabled={settings?.creativeAiEnabled ?? false} /> : null}
 
       {briefPost && briefAnalysis ? (
         <TikTokBriefModal
           analysis={briefAnalysis}
           assets={assets}
           copy={copy}
+          creativeAiEnabled={settings?.creativeAiEnabled ?? false}
           initialBackgroundPath={briefInitialBackground}
           matchedProduct={briefAnalysis.matchedProductId ? products.find((product) => product.id === briefAnalysis.matchedProductId) : undefined}
           post={briefPost}
@@ -898,23 +968,38 @@ function SettingsView({
   copy,
   onSave,
   onSaveOpenAI,
+  onSaveGemini,
   onLoginThreads,
   onCheckThreads,
-  onOpenBilling
+  onOpenBilling,
+  onOpenGeminiApiKeys
 }: {
   settings: AppSettings | null;
   copy: TranslationCopy;
   onSave: (settings: UpdateSettingsRequest) => Promise<AppSettings | null>;
   onSaveOpenAI: (settings: { openAiApiKey?: string; openAiModel?: string }) => Promise<void>;
+  onSaveGemini: (settings: { geminiApiKey?: string }) => Promise<void>;
   onLoginThreads: () => void;
   onCheckThreads: () => void;
   onOpenBilling: () => void;
+  onOpenGeminiApiKeys: () => void;
 }) {
   const [apiKey, setApiKey] = useState('');
+  const [geminiApiKey, setGeminiApiKey] = useState('');
   const [model, setModel] = useState(settings?.openAiModel ?? recommendedOpenAIModel);
   const [saving, setSaving] = useState(false);
+  const [savingGemini, setSavingGemini] = useState(false);
   const [ttsDrafts, setTtsDrafts] = useState<Record<TtsSegmentKind, string>>({ hook: '', post: '', reply: '', transition: '', solution: '', cta: '' });
   const [silenceDraft, setSilenceDraft] = useState(400);
+  const [ttsProviderDraft, setTtsProviderDraft] = useState<TtsProvider>(settings?.ttsProvider ?? 'openai');
+  const [voiceDraft, setVoiceDraft] = useState<TtsVoice>(settings?.defaultVoice ?? 'nova');
+  const [speedDraft, setSpeedDraft] = useState(settings?.defaultSpeed ?? 1.1);
+  const [previewText, setPreviewText] = useState('Some stories only need a slower pace to keep people listening until the end.');
+  const [previewingVoice, setPreviewingVoice] = useState(false);
+  const [previewStatus, setPreviewStatus] = useState<string | null>(null);
+  const [localTtsStatus, setLocalTtsStatus] = useState<LocalTtsStatus | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const speedSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [savingVoice, setSavingVoice] = useState(false);
   const [dailyLimitDraft, setDailyLimitDraft] = useState(0);
   const [pricingDraft, setPricingDraft] = useState({ chatInPerM: 0, chatOutPerM: 0, ttsPerMillionChars: 12, whisperPerMinute: 0.006 });
@@ -927,14 +1012,33 @@ function SettingsView({
   useEffect(() => {
     if (settings?.ttsInstructions) setTtsDrafts(settings.ttsInstructions);
     if (typeof settings?.segmentSilenceMs === 'number') setSilenceDraft(settings.segmentSilenceMs);
-  }, [settings?.ttsInstructions, settings?.segmentSilenceMs]);
+    if (settings?.ttsProvider) setTtsProviderDraft(settings.ttsProvider);
+    if (settings?.defaultVoice) setVoiceDraft(settings.defaultVoice);
+    if (typeof settings?.defaultSpeed === 'number') setSpeedDraft(settings.defaultSpeed);
+  }, [settings?.defaultSpeed, settings?.defaultVoice, settings?.ttsInstructions, settings?.segmentSilenceMs, settings?.ttsProvider]);
 
   useEffect(() => {
     if (typeof settings?.dailyCostLimitUsd === 'number') setDailyLimitDraft(settings.dailyCostLimitUsd);
     if (settings?.pricing) setPricingDraft(settings.pricing);
   }, [settings?.dailyCostLimitUsd, settings?.pricing]);
 
-  const ttsKinds: Array<{ kind: TtsSegmentKind; label: string }> = [
+  useEffect(() => () => {
+    if (speedSaveTimerRef.current) clearTimeout(speedSaveTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    void window.desktopAPI?.getLocalTtsStatus().then(setLocalTtsStatus);
+  }, []);
+
+  useEffect(() => {
+    setPreviewText(
+      settings?.language === 'vi'
+        ? 'Có những câu chuyện chỉ cần đọc chậm lại một chút là đã đủ khiến người ta muốn nghe đến cuối.'
+        : 'Some stories only need a slower pace to keep people listening until the end.'
+    );
+  }, [settings?.language]);
+
+  const allTtsKinds: Array<{ kind: TtsSegmentKind; label: string }> = [
     { kind: 'hook', label: copy.ttsKindHook },
     { kind: 'post', label: copy.ttsKindPost },
     { kind: 'reply', label: copy.ttsKindReply },
@@ -942,9 +1046,119 @@ function SettingsView({
     { kind: 'solution', label: copy.ttsKindSolution },
     { kind: 'cta', label: copy.ttsKindCta }
   ];
+  const ttsKinds = settings?.creativeAiEnabled ? allTtsKinds : allTtsKinds.filter(({ kind }) => kind === 'post' || kind === 'reply');
+  const vi = settings?.language === 'vi';
+  const features = settings?.featureVisibility ?? defaultFeatureVisibility;
+  const activeVoiceOptions = getTtsVoiceOptions(ttsProviderDraft);
+  const selectedVoiceOption = activeVoiceOptions.find((option) => option.id === voiceDraft) ?? activeVoiceOptions[0];
+
+  function selectTtsProvider(provider: TtsProvider) {
+    setTtsProviderDraft(provider);
+    if (!isTtsVoiceForProvider(provider, voiceDraft)) {
+      setVoiceDraft(getDefaultVoiceForProvider(provider));
+    }
+    setPreviewStatus(null);
+  }
+
+  function updateSpeed(nextSpeed: number) {
+    const normalizedSpeed = Math.round(Math.min(Math.max(nextSpeed, 0.9), 1.3) * 100) / 100;
+    setSpeedDraft(normalizedSpeed);
+    if (speedSaveTimerRef.current) clearTimeout(speedSaveTimerRef.current);
+    speedSaveTimerRef.current = setTimeout(() => {
+      speedSaveTimerRef.current = null;
+      void onSave({ defaultSpeed: normalizedSpeed });
+    }, 250);
+  }
+
+  async function previewVoice() {
+    const api = window.desktopAPI;
+    if (!api || previewingVoice) return;
+    setPreviewingVoice(true);
+    setPreviewStatus(null);
+    try {
+      previewAudioRef.current?.pause();
+      previewAudioRef.current = null;
+      const result = await api.previewTts({
+        text: previewText,
+        provider: ttsProviderDraft,
+        voice: voiceDraft,
+        speed: speedDraft,
+        instructions: ttsDrafts.post
+      });
+      if (ttsProviderDraft === 'vieneu') {
+        void api.getLocalTtsStatus().then(setLocalTtsStatus);
+      }
+      if (!result.ok || !result.audioDataUrl) {
+        setPreviewStatus(result.message);
+        return;
+      }
+      const audio = new Audio(result.audioDataUrl);
+      previewAudioRef.current = audio;
+      audio.onended = () => setPreviewingVoice(false);
+      audio.onerror = () => {
+        setPreviewStatus(vi ? 'Không thể phát bản nghe thử.' : 'Unable to play the preview.');
+        setPreviewingVoice(false);
+      };
+      const providerLabel = result.source === 'gemini_api'
+        ? 'Gemini'
+        : result.source === 'local_vieneu'
+          ? 'VieNeu Local'
+          : 'OpenAI';
+      setPreviewStatus(
+        result.cached
+          ? (vi ? 'Đang phát từ cache, không gọi lại API.' : 'Playing from cache; no new API call.')
+          : result.source === 'local_vieneu'
+            ? (vi
+                ? 'Giọng được tạo trên máy; văn bản được chuẩn hóa theo ngữ cảnh khi có OpenAI key.'
+                : 'Voice generated on-device; text is context-normalized when an OpenAI key is available.')
+            : (vi ? `Bản nghe thử mới được tạo qua ${providerLabel} API.` : `New preview generated with the ${providerLabel} API.`)
+      );
+      await audio.play();
+    } catch (previewError) {
+      setPreviewStatus(previewError instanceof Error ? previewError.message : String(previewError));
+    } finally {
+      if (!previewAudioRef.current || previewAudioRef.current.ended) setPreviewingVoice(false);
+    }
+  }
 
   return (
     <div className="max-w-3xl space-y-4">
+      <div className="rounded-lg border border-accent/30 bg-panel p-5">
+        <div className="mb-1 flex items-center gap-2 text-base font-semibold text-text">
+          <SlidersHorizontal className="size-4 text-accent" />
+          {vi ? 'Giao diện & tính năng' : 'Interface & features'}
+        </div>
+        <div className="mb-4 text-sm text-muted">
+          {vi ? 'Các công cụ phụ được ẩn khỏi sidebar cho đến khi bạn cần.' : 'Optional tools stay out of the sidebar until you need them.'}
+        </div>
+        <div className="divide-y divide-border">
+          <SettingsToggle
+            checked={settings?.creativeAiEnabled ?? false}
+            label={vi ? 'AI sáng tạo nội dung' : 'Creative AI copy'}
+            description={vi ? 'Sinh hook, transition, solution, CTA và caption. Tắt để đọc nguyên văn bài gốc.' : 'Generate hooks, transitions, solutions, CTAs and captions. Keep off for verbatim reading.'}
+            onChange={(checked) => onSave({ creativeAiEnabled: checked })}
+          />
+          <SettingsToggle
+            checked={features.opportunityDiscovery}
+            label={vi ? 'Săn cơ hội & nghiên cứu' : 'Discovery & research'}
+            description={vi ? 'Inbox cơ hội, trending feed, keyword và bài đã lưu.' : 'Opportunity inbox, trending feed, keywords and saved posts.'}
+            onChange={(checked) => onSave({ featureVisibility: { opportunityDiscovery: checked } })}
+          />
+          <SettingsToggle
+            checked={features.affiliateWorkspace}
+            label={vi ? 'Sản phẩm affiliate' : 'Affiliate products'}
+            description={vi ? 'Danh mục sản phẩm và ghép sản phẩm vào nội dung.' : 'Product catalog and product matching.'}
+            onChange={(checked) => onSave({ featureVisibility: { affiliateWorkspace: checked } })}
+          />
+          <SettingsToggle
+            checked={features.resultsTracking}
+            label={vi ? 'Theo dõi kết quả' : 'Results tracking'}
+            description={vi ? 'Lưu hiệu suất video sau khi đăng.' : 'Log published video performance.'}
+            onChange={(checked) => onSave({ featureVisibility: { resultsTracking: checked } })}
+          />
+        </div>
+      </div>
+
       <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-4 text-base font-semibold text-text">{copy.openAi}</div>
         <div className="grid gap-3">
@@ -973,6 +1187,49 @@ function SettingsView({
             </Button>
             <Button icon={<ExternalLink className="size-4" />} onClick={onOpenBilling}>
               {copy.openAiBillingDashboard}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-panel p-5">
+        <div className="mb-1 text-base font-semibold text-text">Gemini TTS</div>
+        <div className="mb-4 text-sm text-muted">
+          {vi
+            ? 'Dùng Gemini Developer API. Free tier phụ thuộc quota của project Google AI Studio.'
+            : 'Uses the Gemini Developer API. Free-tier access depends on your Google AI Studio project quota.'}
+        </div>
+        <div className="grid gap-3">
+          <Input
+            type="password"
+            value={geminiApiKey}
+            onChange={(event) => setGeminiApiKey(event.target.value)}
+            placeholder={settings?.geminiApiKeySet ? settings.maskedGeminiApiKey ?? 'Gemini API key đã lưu' : 'Gemini API key'}
+          />
+          <div className="text-xs text-muted">
+            {settings?.geminiApiKeySet
+              ? (vi
+                  ? `Đã lưu cục bộ: ${settings.maskedGeminiApiKey ?? '••••••••'}. Chỉ nhập key mới khi muốn thay thế.`
+                  : `Saved locally: ${settings.maskedGeminiApiKey ?? '••••••••'}. Enter a new key only to replace it.`)
+              : (vi
+                  ? 'Tạo API key trong Google AI Studio rồi lưu và kiểm tra kết nối.'
+                  : 'Create an API key in Google AI Studio, then save and verify it.')}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="primary"
+              disabled={savingGemini || (!geminiApiKey.trim() && !settings?.geminiApiKeySet)}
+              onClick={async () => {
+                setSavingGemini(true);
+                await onSaveGemini({ geminiApiKey });
+                setGeminiApiKey('');
+                setSavingGemini(false);
+              }}
+            >
+              {savingGemini ? copy.saving : (vi ? 'Lưu & kiểm tra' : 'Save & verify')}
+            </Button>
+            <Button icon={<ExternalLink className="size-4" />} onClick={onOpenGeminiApiKeys}>
+              {vi ? 'Mở Google AI Studio' : 'Open Google AI Studio'}
             </Button>
           </div>
         </div>
@@ -1010,7 +1267,7 @@ function SettingsView({
         </select>
       </div>
 
-      <div className="rounded-lg border border-border bg-panel p-5">
+      {features.opportunityDiscovery ? <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-2 text-base font-semibold text-text">{copy.autoScan}</div>
         <div className="mb-4 text-sm text-muted">{copy.autoScanHelp}</div>
         <div className="flex items-center justify-between gap-4 border-b border-border pb-4">
@@ -1045,11 +1302,182 @@ function SettingsView({
             <span className={cn('block size-4 rounded-full bg-white transition', settings?.scanOnLaunch ? 'translate-x-4' : 'translate-x-0')} />
           </button>
         </div>
-      </div>
+      </div> : null}
 
       <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-2 text-base font-semibold text-text">{copy.ttsInstructionsTitle}</div>
         <div className="mb-4 text-sm text-muted">{copy.ttsInstructionsHelp}</div>
+
+        <div className="mb-5">
+          <div className="mb-2 text-xs font-medium text-muted">{vi ? 'Nhà cung cấp TTS' : 'TTS provider'}</div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {(['openai', 'gemini', 'vieneu'] as TtsProvider[]).map((provider) => {
+              const selected = ttsProviderDraft === provider;
+              const checkingLocal = provider === 'vieneu' && !localTtsStatus;
+              const ready = provider === 'gemini'
+                ? settings?.geminiApiKeySet
+                : provider === 'vieneu'
+                  ? localTtsStatus?.installed && localTtsStatus.modelReady
+                  : settings?.openAiApiKeySet;
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  aria-pressed={selected}
+                  className={cn(
+                    'min-h-14 rounded-md border px-3 py-2 text-left transition',
+                    selected
+                      ? 'border-accent bg-accent/10 text-text'
+                      : 'border-border bg-[#0f1217] text-muted hover:border-accent/50 hover:text-text'
+                  )}
+                  onClick={() => selectTtsProvider(provider)}
+                >
+                  <span className="flex items-center justify-between gap-2 text-sm font-semibold">
+                    {provider === 'gemini' ? 'Gemini' : provider === 'vieneu' ? 'VieNeu Local' : 'OpenAI'}
+                    <span className={cn('text-[10px] font-medium', ready ? 'text-emerald-300' : 'text-amber-300')}>
+                      {ready
+                        ? provider === 'vieneu'
+                          ? (vi ? 'Sẵn sàng' : 'Ready')
+                          : (vi ? 'Đã kết nối' : 'Connected')
+                        : checkingLocal
+                          ? (vi ? 'Đang kiểm tra' : 'Checking')
+                        : provider === 'vieneu'
+                          ? (vi ? 'Chưa cài model' : 'Model missing')
+                          : (vi ? 'Thiếu API key' : 'API key needed')}
+                    </span>
+                  </span>
+                  <span className="mt-1 block text-xs">
+                    {provider === 'gemini'
+                      ? (vi ? '30 giọng · tiếng Việt · free tier theo quota' : '30 voices · Vietnamese · quota-based free tier')
+                      : provider === 'vieneu'
+                        ? (vi ? 'Giọng Việt local · chuẩn hóa ngữ cảnh thông minh' : 'Local Vietnamese voices · smart context normalization')
+                        : (vi ? 'Ổn định · dùng chung hệ sinh thái hiện tại' : 'Stable · current ecosystem')}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mb-5 flex flex-wrap items-center gap-2 border-y border-border py-3 text-xs">
+          <span className="rounded-md bg-sky-400/10 px-2 py-1 font-medium text-sky-200">
+            {ttsProviderDraft === 'gemini'
+              ? 'Gemini API'
+              : ttsProviderDraft === 'vieneu'
+                ? 'Local CPU'
+                : 'OpenAI API'}
+          </span>
+          <span className="text-muted">{getTtsModel(ttsProviderDraft)}</span>
+          <span className="text-muted">·</span>
+          <span className="text-muted">
+            {ttsProviderDraft === 'vieneu' ? (vi ? 'Chạy trên máy' : 'On-device') : 'Cloud TTS'}
+          </span>
+          <span className="ml-auto text-emerald-200">{vi ? 'Có cache giọng đọc' : 'Speech cache enabled'}</span>
+        </div>
+
+        {ttsProviderDraft === 'vieneu' ? (
+          <div className="mb-5 border-b border-border pb-5 text-xs">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <span className={localTtsStatus?.ok ? 'text-emerald-200' : 'text-amber-200'}>
+                {localTtsStatus?.message ?? (vi ? 'Đang kiểm tra VieNeu Local...' : 'Checking VieNeu Local...')}
+              </span>
+              {localTtsStatus?.version ? <span className="text-muted">v{localTtsStatus.version}</span> : null}
+              {localTtsStatus?.backend ? <span className="text-muted">{localTtsStatus.backend}</span> : null}
+            </div>
+            <div className="mt-2 text-muted">
+              {vi
+                ? 'VieNeu tạo audio trên máy. Khi có OpenAI key, phần văn bản được gửi để sửa typo và viết tắt theo ngữ cảnh trước khi đọc.'
+                : 'VieNeu generates audio on-device. With an OpenAI key, text is sent for contextual typo and abbreviation normalization first.'}
+            </div>
+            {settings?.karaokeCaptionsEnabled ? (
+              <div className="mt-2 text-amber-200">
+                {vi
+                  ? 'VieNeu không tốn API cho audio; chuẩn hóa văn bản và Karaoke timestamp vẫn dùng OpenAI.'
+                  : 'VieNeu audio generation has no API cost; text normalization and Karaoke timestamps still use OpenAI.'}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mb-5">
+          <div className="mb-2 text-xs font-medium text-muted">{vi ? 'Giọng đọc' : 'Voice'}</div>
+          {ttsProviderDraft === 'openai' ? (
+            <div className="grid gap-2 sm:grid-cols-3">
+              {openAiTtsVoiceOptions.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={voiceDraft === option.id}
+                  className={cn(
+                    'min-h-16 rounded-md border px-3 py-2 text-left transition',
+                    voiceDraft === option.id ? 'border-accent bg-accent/10 text-text' : 'border-border bg-[#0f1217] text-muted hover:border-accent/50 hover:text-text'
+                  )}
+                  onClick={() => setVoiceDraft(option.id)}
+                >
+                  <span className="block text-sm font-semibold">{option.label}</span>
+                  <span className="mt-1 block text-xs">{option.description[vi ? 'vi' : 'en']}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              <select
+                value={voiceDraft}
+                onChange={(event) => setVoiceDraft(event.target.value as TtsVoice)}
+                className="h-10 w-full rounded-md border border-border bg-[#0f1217] px-3 text-sm text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+              >
+                {activeVoiceOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label} · {option.description[vi ? 'vi' : 'en']}
+                  </option>
+                ))}
+              </select>
+              <div className="text-xs text-muted">
+                {selectedVoiceOption.label}: {selectedVoiceOption.description[vi ? 'vi' : 'en']}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mb-5 grid gap-4 border-b border-border pb-5 md:grid-cols-[1fr_180px]">
+          <label className="grid gap-2 text-xs font-medium text-muted">
+            {vi ? 'Câu nghe thử' : 'Preview text'}
+            <textarea
+              value={previewText}
+              maxLength={500}
+              rows={3}
+              className="w-full rounded-md border border-border bg-[#0f1217] px-3 py-2 text-sm font-normal leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+              onChange={(event) => setPreviewText(event.target.value)}
+            />
+          </label>
+          <div className="grid content-between gap-3">
+            <label className="grid gap-2 text-xs font-medium text-muted">
+              <span className="flex items-center justify-between gap-2">
+                <span>{vi ? 'Tốc độ' : 'Speed'}</span>
+                <span className="text-text">{speedDraft.toFixed(2)}×</span>
+              </span>
+              <input
+                type="range"
+                min={0.9}
+                max={1.3}
+                step={0.05}
+                value={speedDraft}
+                onChange={(event) => updateSpeed(Number(event.target.value))}
+                className="h-2 w-full cursor-pointer accent-sky-300"
+              />
+            </label>
+            <Button
+              icon={previewingVoice ? <LoaderCircle className="size-4 animate-spin" /> : <Volume2 className="size-4" />}
+              disabled={previewingVoice || !previewText.trim()}
+              onClick={previewVoice}
+            >
+              {previewingVoice ? (vi ? 'Đang tạo...' : 'Generating...') : (vi ? 'Nghe thử' : 'Preview voice')}
+            </Button>
+          </div>
+        </div>
+
+        {previewStatus ? <div className="mb-4 text-xs text-sky-200">{previewStatus}</div> : null}
+
         <div className="grid gap-3">
           {ttsKinds.map(({ kind, label }) => (
             <div key={kind}>
@@ -1096,7 +1524,13 @@ function SettingsView({
               disabled={savingVoice}
               onClick={async () => {
                 setSavingVoice(true);
-                await onSave({ ttsInstructions: ttsDrafts, segmentSilenceMs: silenceDraft });
+                await onSave({
+                  ttsProvider: ttsProviderDraft,
+                  defaultVoice: voiceDraft,
+                  defaultSpeed: speedDraft,
+                  ttsInstructions: ttsDrafts,
+                  segmentSilenceMs: silenceDraft
+                });
                 setSavingVoice(false);
               }}
             >
@@ -1145,6 +1579,37 @@ function SettingsView({
         </Button>
       </div>
 
+    </div>
+  );
+}
+
+function SettingsToggle({
+  checked,
+  description,
+  label,
+  onChange
+}: {
+  checked: boolean;
+  description: string;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-5 py-4 first:pt-1 last:pb-1">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-text">{label}</div>
+        <div className="mt-1 text-xs leading-5 text-muted">{description}</div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={cn('h-6 w-11 shrink-0 rounded-full p-0.5 transition', checked ? 'bg-accent' : 'bg-border')}
+      >
+        <span className={cn('block size-5 rounded-full bg-white transition', checked ? 'translate-x-5' : 'translate-x-0')} />
+      </button>
     </div>
   );
 }
@@ -1199,22 +1664,115 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (value: str
   );
 }
 
-function AssetLibraryView({ assets, onAdd, onDelete, onPreview }: { assets: AssetLibraryItem[]; onAdd: (type: AssetType) => void; onDelete: (id: string) => void; onPreview: (id: string) => void }) {
-  const [type, setType] = useState<AssetType>('background');
-  const visible = assets.filter((asset) => asset.type === type);
+function AssetLibraryView({
+  assets,
+  generatedVideos,
+  showProductClips,
+  onAdd,
+  onDelete,
+  onDeleteGenerated,
+  onOpenGenerated,
+  onPreview
+}: {
+  assets: AssetLibraryItem[];
+  generatedVideos: GeneratedVideoItem[];
+  showProductClips: boolean;
+  onAdd: (type: AssetType) => void;
+  onDelete: (id: string) => void;
+  onDeleteGenerated: (filePath: string) => void;
+  onOpenGenerated: (filePath: string) => void;
+  onPreview: (id: string) => void;
+}) {
+  const [type, setType] = useState<AssetType | 'created'>('background');
+  const visible = type === 'created' ? [] : assets.filter((asset) => asset.type === type);
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div><h2 className="text-lg font-semibold text-text">Kho clip</h2><p className="mt-1 text-sm text-muted">Lưu clip nền retention và clip demo sản phẩm để tái sử dụng khi tạo video nháp.</p></div>
-        <Button variant="primary" icon={<Upload className="size-4" />} onClick={() => onAdd(type)}>Thêm clip</Button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-text">Kho clip</h2>
+          <p className="mt-1 text-sm text-muted">Quản lý clip nền và các video đã tạo.</p>
+        </div>
+        {type !== 'created' ? (
+          <Button variant="primary" icon={<Upload className="size-4" />} onClick={() => onAdd(type)}>
+            Thêm clip
+          </Button>
+        ) : null}
       </div>
-      <div className="flex gap-2"><FilterToggle active={type === 'background'} label="Background" onClick={() => setType('background')} /><FilterToggle active={type === 'product'} label="Product" onClick={() => setType('product')} /></div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6">
-        {visible.map((asset) => <div key={asset.id} className="overflow-hidden rounded-lg border border-border bg-panel"><button className="group relative block aspect-video w-full overflow-hidden bg-background" title={`Preview ${asset.label}`} onClick={() => onPreview(asset.id)}>{asset.thumbnailDataUrl ? <img src={asset.thumbnailDataUrl} alt="" className="size-full object-cover transition duration-200 group-hover:scale-105" /> : <div className="grid size-full place-items-center text-[11px] text-muted">Chưa có thumbnail</div>}<span className="absolute inset-0 grid place-items-center bg-black/0 transition group-hover:bg-black/35"><Play className="size-6 fill-white text-white opacity-0 transition group-hover:opacity-100" /></span></button><div className="p-2.5"><div className="truncate text-xs font-semibold text-text" title={asset.label}>{asset.label}</div><div className="mt-1.5 text-[11px] text-muted">{asset.durationSecs.toFixed(1)}s · đã dùng {asset.timesUsed} lần</div><div className="mt-2 flex justify-end gap-1.5"><Button className="h-8 px-2" title="Preview clip" icon={<Play className="size-3.5" />} onClick={() => onPreview(asset.id)} /><Button className="h-8 px-2" title="Xóa clip khỏi Kho clip" icon={<Trash2 className="size-3.5" />} onClick={() => onDelete(asset.id)} /></div></div></div>)}
+
+      <div className="flex flex-wrap gap-2">
+        <FilterToggle active={type === 'background'} label="Clip nền" onClick={() => setType('background')} />
+        <FilterToggle active={type === 'created'} label={`Video đã tạo (${generatedVideos.length})`} onClick={() => setType('created')} />
+        {showProductClips ? <FilterToggle active={type === 'product'} label="Clip sản phẩm" onClick={() => setType('product')} /> : null}
       </div>
-      {!visible.length ? <div className="rounded-lg border border-border bg-panel p-6 text-sm text-muted">Chưa có clip trong nhóm này. Bạn vẫn có thể chọn file MP4 trực tiếp khi tạo video.</div> : null}
+
+      {type === 'created' ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+          {generatedVideos.map((video) => (
+            <article key={video.id} className="overflow-hidden rounded-lg border border-border bg-panel">
+              <button className="group relative block aspect-video w-full overflow-hidden bg-background" title={`Mở ${video.label}`} onClick={() => onOpenGenerated(video.filePath)}>
+                {video.thumbnailDataUrl ? (
+                  <img src={video.thumbnailDataUrl} alt="" className="size-full object-cover transition duration-200 group-hover:scale-105" />
+                ) : (
+                  <div className="grid size-full place-items-center text-[11px] text-muted">Chưa có thumbnail</div>
+                )}
+                <span className="absolute inset-0 grid place-items-center bg-black/0 transition group-hover:bg-black/35">
+                  <Play className="size-7 fill-white text-white opacity-0 transition group-hover:opacity-100" />
+                </span>
+              </button>
+              <div className="p-3">
+                <div className="truncate text-xs font-semibold text-text" title={video.label}>{video.label}</div>
+                <div className="mt-1.5 text-[11px] text-muted">{formatFileSize(video.sizeBytes)} · {formatGeneratedDate(video.createdAt)}</div>
+                <div className="mt-3 flex justify-end gap-1.5">
+                  <Button className="h-8 px-2" title="Mở video" icon={<Play className="size-3.5" />} onClick={() => onOpenGenerated(video.filePath)} />
+                  <Button
+                    className="h-8 px-2"
+                    title="Xóa video"
+                    icon={<Trash2 className="size-3.5" />}
+                    onClick={() => {
+                      if (window.confirm(`Xóa video "${video.label}" khỏi máy?`)) onDeleteGenerated(video.filePath);
+                    }}
+                  />
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6">
+          {visible.map((asset) => (
+            <article key={asset.id} className="overflow-hidden rounded-lg border border-border bg-panel">
+              <button className="group relative block aspect-video w-full overflow-hidden bg-background" title={`Preview ${asset.label}`} onClick={() => onPreview(asset.id)}>
+                {asset.thumbnailDataUrl ? <img src={asset.thumbnailDataUrl} alt="" className="size-full object-cover transition duration-200 group-hover:scale-105" /> : <div className="grid size-full place-items-center text-[11px] text-muted">Chưa có thumbnail</div>}
+                <span className="absolute inset-0 grid place-items-center bg-black/0 transition group-hover:bg-black/35"><Play className="size-6 fill-white text-white opacity-0 transition group-hover:opacity-100" /></span>
+              </button>
+              <div className="p-2.5">
+                <div className="truncate text-xs font-semibold text-text" title={asset.label}>{asset.label}</div>
+                <div className="mt-1.5 text-[11px] text-muted">{asset.durationSecs.toFixed(1)}s · đã dùng {asset.timesUsed} lần</div>
+                <div className="mt-2 flex justify-end gap-1.5">
+                  <Button className="h-8 px-2" title="Preview clip" icon={<Play className="size-3.5" />} onClick={() => onPreview(asset.id)} />
+                  <Button className="h-8 px-2" title="Xóa clip khỏi Kho clip" icon={<Trash2 className="size-3.5" />} onClick={() => onDelete(asset.id)} />
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+
+      {type === 'created' && !generatedVideos.length ? <div className="rounded-lg border border-border bg-panel p-6 text-sm text-muted">Chưa có video nào được tạo.</div> : null}
+      {type !== 'created' && !visible.length ? <div className="rounded-lg border border-border bg-panel p-6 text-sm text-muted">Chưa có clip trong nhóm này. Bạn vẫn có thể chọn file MP4 trực tiếp khi tạo video.</div> : null}
     </div>
   );
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatGeneratedDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
 }
 
 function RepliesDrawer({ post, loading, onClose, onReload }: { post: ThreadsPost; loading: boolean; onClose: () => void; onReload: () => void }) {
@@ -1241,6 +1799,8 @@ function mergePosts(incoming: ThreadsPost[], current: ThreadsPost[]) {
 function titleForView(view: string, copy: TranslationCopy) {
   switch (view) {
     case 'home':
+      return copy.createFromLinkTitle;
+    case 'opportunities':
       return copy.opportunityInbox;
     case 'trending':
       return copy.trendingFeed;
@@ -1263,7 +1823,8 @@ function titleForView(view: string, copy: TranslationCopy) {
 
 function sectionLabelForView(view: string) {
   return {
-    home: 'Smart Inbox',
+    home: 'Video workspace',
+    opportunities: 'Smart Inbox',
     trending: 'Research',
     keywords: 'Sources',
     saved: 'Library',
@@ -1272,4 +1833,12 @@ function sectionLabelForView(view: string) {
     uploads: 'Performance',
     settings: 'Settings'
   }[view] ?? 'Trend Finder';
+}
+
+function isViewEnabled(view: string, features: AppSettings['featureVisibility']) {
+  if (['opportunities', 'trending', 'keywords', 'saved'].includes(view)) return features.opportunityDiscovery;
+  if (view === 'products') return features.affiliateWorkspace;
+  if (view === 'assets') return true;
+  if (view === 'uploads') return features.resultsTracking;
+  return true;
 }

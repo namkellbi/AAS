@@ -1,6 +1,6 @@
 import type { AIAnalysis, CreateFromLinkProgress, CreateFromLinkResult } from '@/lib/types';
 import { analyzeAffiliateOpportunity } from '@/server/ai/affiliateAnalysisService';
-import { getAnalysis, getOpenAiApiKey, listAssets } from '@/server/db/client';
+import { getAnalysis, getCreativeAiEnabled, getOpenAiApiKey, listAssets } from '@/server/db/client';
 import { importAndStoreThreadsPost } from '@/server/services/fetchService';
 
 export async function createVideoFromLink(url: string, onProgress: (progress: CreateFromLinkProgress) => void = () => {}): Promise<CreateFromLinkResult> {
@@ -8,9 +8,15 @@ export async function createVideoFromLink(url: string, onProgress: (progress: Cr
   const post = await importAndStoreThreadsPost(url);
 
   let analysis: AIAnalysis | null = getAnalysis(post.id);
-  if (!analysis || analysis.confidenceScore === 0) {
+  const creativeAiEnabled = getCreativeAiEnabled();
+  const needsCreativeCopy = creativeAiEnabled && analysis && !analysis.hooks.length && !analysis.videoScript.transitionLine;
+  if (!analysis || analysis.confidenceScore === 0 || needsCreativeCopy) {
     if (!getOpenAiApiKey()) throw new Error('OpenAI API key is missing. Add it in Settings before running AI analysis.');
-    onProgress({ phase: 'analyzing', percent: 45, message: 'Đang chạy AI phân tích cơ hội affiliate...' });
+    onProgress({
+      phase: 'analyzing',
+      percent: 45,
+      message: creativeAiEnabled ? 'Đang tạo nội dung bổ sung bằng AI...' : 'Đang đọc bài và chọn replies phù hợp...'
+    });
     analysis = await analyzeAffiliateOpportunity(post);
   }
 

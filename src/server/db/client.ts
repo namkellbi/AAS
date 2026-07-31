@@ -3,13 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig } from '@/server/config';
 import { schema } from '@/server/db/schema';
+import { defaultCreativeAiEnabled, defaultFeatureVisibility } from '@/lib/content-mode';
 import { defaultKeywords } from '@/lib/default-keywords';
 import { recommendedOpenAIModel } from '@/lib/openai-models';
 import { defaultPricing, fallbackChatPricing, type PricingConfig } from '@/lib/pricing';
-import { filterUsefulReplies } from '@/lib/replies';
+import { filterUsefulReplies, isUsefulReplyContent, sanitizeThreadsReplyContent } from '@/lib/replies';
+import { getDefaultVoiceForProvider, isTtsVoiceForProvider } from '@/lib/tts';
 import { detectThreadsAccountName } from '@/server/scraper/threadsScraper';
 import { scorePost } from '@/server/scoring/trendingScore';
-import type { AIAnalysis, ApiUsageKind, AssetLibraryItem, AssetType, ContentGoal, Keyword, KeywordExclusion, KeywordInsight, Product, ReadinessThresholds, SavedPost, ThreadsPost, ThreadsReply, TrendState, TtsSegmentKind, UploadLogEntry, UsageSummary } from '@/lib/types';
+import type { AIAnalysis, ApiUsageKind, AssetLibraryItem, AssetType, ContentGoal, FeatureVisibility, Keyword, KeywordExclusion, KeywordInsight, Product, ReadinessThresholds, SavedPost, ThreadsPost, ThreadsReply, TrendState, TtsProvider, TtsSegmentKind, TtsVoice, UploadLogEntry, UsageSummary } from '@/lib/types';
 import { clamp, nowIso } from '@/lib/utils';
 
 let db: Database.Database | null = null;
@@ -696,6 +698,20 @@ export function getOpenAiModel() {
   return getSetting('openai.model') || process.env.OPENAI_MODEL || recommendedOpenAIModel;
 }
 
+export function setGeminiApiKey(apiKey: string) {
+  setSetting('gemini.api_key', encryptSecret(apiKey));
+}
+
+export function getGeminiApiKey() {
+  const stored = getSetting('gemini.api_key');
+  return stored ? decryptSecret(stored) : process.env.GEMINI_API_KEY || '';
+}
+
+export function getTtsProvider(): TtsProvider {
+  const provider = getSetting('video.tts_provider');
+  return provider === 'gemini' || provider === 'vieneu' ? provider : 'openai';
+}
+
 export function getAutoScanEnabled() {
   return getSetting('app.auto_scan_enabled') === 'true';
 }
@@ -709,13 +725,34 @@ export function getScanOnLaunch() {
   return getSetting('app.scan_on_launch') === 'true';
 }
 
+export function getCreativeAiEnabled() {
+  const value = getSetting('features.creative_ai');
+  return value === null ? defaultCreativeAiEnabled : value === 'true';
+}
+
+export function getFeatureVisibility(): FeatureVisibility {
+  return {
+    opportunityDiscovery: settingBoolean('features.opportunity_discovery', defaultFeatureVisibility.opportunityDiscovery),
+    affiliateWorkspace: settingBoolean('features.affiliate_workspace', defaultFeatureVisibility.affiliateWorkspace),
+    assetLibrary: settingBoolean('features.asset_library', defaultFeatureVisibility.assetLibrary),
+    resultsTracking: settingBoolean('features.results_tracking', defaultFeatureVisibility.resultsTracking)
+  };
+}
+
+function settingBoolean(key: string, fallback: boolean) {
+  const value = getSetting(key);
+  return value === null ? fallback : value === 'true';
+}
+
 export function getTiktokChannelName() {
   return getSetting('video.tiktok_channel_name') || '@yourchannel';
 }
 
-export function getDefaultVoice(): 'onyx' | 'nova' | 'shimmer' {
+export function getDefaultVoice(): TtsVoice {
+  const provider = getTtsProvider();
   const value = getSetting('video.default_voice');
-  return value === 'nova' || value === 'shimmer' ? value : 'onyx';
+  if (isTtsVoiceForProvider(provider, value)) return value;
+  return getDefaultVoiceForProvider(provider);
 }
 
 export function getDefaultSpeed() {
@@ -729,7 +766,7 @@ export function getTransitionSoundEnabled() {
 
 export const defaultTtsInstructions: Record<TtsSegmentKind, string> = {
   hook: 'Đọc nhanh, punchy, giọng gây tò mò như đang mở đầu một chuyện hay. Không tự thêm hoặc bớt nội dung.',
-  post: 'Đọc chậm rãi, tâm sự, như kể chuyện cho bạn thân nghe. Ngắt nghỉ tự nhiên theo dấu câu. Không tự thêm hoặc bớt nội dung.',
+  post: 'Đọc tự nhiên, rõ ràng; nhịp độ tuân theo cài đặt tốc độ. Chỉ ngắt nghỉ theo dấu câu và không kéo dài từ. Không tự thêm hoặc bớt nội dung.',
   reply: 'Đọc nhẹ nhàng, tự nhiên như đang đọc bình luận cho bạn nghe. Không tự thêm hoặc bớt nội dung.',
   transition: 'Đọc với tông chuyển nhẹ nhàng, như vừa phát hiện ra điều gì đó. Không tự thêm hoặc bớt nội dung.',
   solution: 'Đọc ấm áp, thuyết phục nhưng thư giãn, tuyệt đối không gào hay lên gân bán hàng. Không tự thêm hoặc bớt nội dung.',
@@ -763,7 +800,9 @@ export function setTtsInstructions(overrides: Partial<Record<TtsSegmentKind, str
 }
 
 export function getSegmentSilenceMs() {
-  const value = Number(getSetting('video.segment_silence_ms'));
+  const stored = getSetting('video.segment_silence_ms');
+  if (stored === null) return 400;
+  const value = Number(stored);
   return Number.isFinite(value) ? Math.round(clamp(value, 0, 1500)) : 400;
 }
 
@@ -1048,7 +1087,10 @@ export function estimateCostUsd(kind: ApiUsageKind, model: string, inputUnits: n
     const chat = pricing.chat[model] ?? fallbackChatPricing;
     return (inputUnits / 1_000_000) * chat.inPerM + (outputUnits / 1_000_000) * chat.outPerM;
   }
-  if (kind === 'tts') return (inputUnits / 1_000_000) * pricing.ttsPerMillionChars;
+  if (kind === 'tts') {
+    if (model.startsWith('gemini-')) return 0;
+    return (inputUnits / 1_000_000) * pricing.ttsPerMillionChars;
+  }
   return (inputUnits / 60) * pricing.whisperPerMinute;
 }
 
@@ -1113,11 +1155,15 @@ export function getUsageSummary(): UsageSummary {
 export function getAppSettings() {
   const config = getConfig();
   const apiKey = getOpenAiApiKey();
+  const geminiApiKey = getGeminiApiKey();
   const accountName = detectThreadsAccountName();
   return {
     openAiApiKeySet: Boolean(apiKey),
     maskedOpenAiApiKey: apiKey ? maskOpenAiApiKey(apiKey) : undefined,
     openAiModel: getOpenAiModel(),
+    geminiApiKeySet: Boolean(geminiApiKey),
+    maskedGeminiApiKey: geminiApiKey ? maskApiKey(geminiApiKey) : undefined,
+    ttsProvider: getTtsProvider(),
     threadsSessionExists: fs.existsSync(config.threadsStorageState) || fs.existsSync(config.threadsProfileDir),
     threadsAccountName: accountName === 'Your Chromium' ? undefined : accountName,
     language: getLanguage(),
@@ -1136,6 +1182,8 @@ export function getAppSettings() {
     , readinessThresholds: getReadinessThresholds()
     , dailyCostLimitUsd: getDailyCostLimitUsd()
     , pricing: resolvePricingView()
+    , creativeAiEnabled: getCreativeAiEnabled()
+    , featureVisibility: getFeatureVisibility()
   };
 }
 
@@ -1155,6 +1203,11 @@ function maskOpenAiApiKey(apiKey: string) {
   const prefix = apiKey.slice(0, Math.min(7, apiKey.length));
   const suffix = apiKey.slice(-4);
   return `${prefix}${'•'.repeat(10)}${suffix}`;
+}
+
+function maskApiKey(apiKey: string) {
+  if (apiKey.length <= 8) return '••••••••';
+  return `${apiKey.slice(0, 4)}${'•'.repeat(10)}${apiKey.slice(-4)}`;
 }
 
 function encryptSecret(value: string) {
@@ -1243,7 +1296,9 @@ function rowToAnalysis(row: Record<string, unknown>): AIAnalysis {
     scriptOutline: jsonParse<string[]>(String(row.script_outline ?? '[]'), []),
     rejectReason: row.reject_reason ? String(row.reject_reason) : undefined,
     commentClassifications: jsonParse(String(row.comment_classifications ?? '[]'), []),
-    bestReplies: jsonParse(String(row.best_replies ?? '[]'), []),
+    bestReplies: jsonParse<AIAnalysis['bestReplies']>(String(row.best_replies ?? '[]'), [])
+      .map((reply) => ({ ...reply, content: sanitizeThreadsReplyContent(reply.content) }))
+      .filter((reply) => isUsefulReplyContent(reply.content)),
     videoPotentialScore: Number(row.video_potential_score ?? 0),
     videoPotentialBreakdown: jsonParse(String(row.video_potential_breakdown ?? '{}'), { visual: 0, demo: 0, emotional: 0, curiosity: 0 }),
     tiktokCaption: String(row.tiktok_caption ?? ''),

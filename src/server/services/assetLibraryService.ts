@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addAsset, deleteAsset, listAssets } from '@/server/db/client';
-import type { AssetLibraryItem, AssetType } from '@/lib/types';
+import type { AssetLibraryItem, AssetType, GeneratedVideoItem } from '@/lib/types';
 
 const videoExtensions = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
@@ -44,6 +45,42 @@ export async function listAssetsWithThumbnails() {
 export function deleteRegisteredAsset(id: string) {
   deleteAsset(id);
   fs.rmSync(thumbnailPath(id), { force: true });
+}
+
+export function listGeneratedVideos(): GeneratedVideoItem[] {
+  const exportsDir = path.resolve(process.cwd(), 'data', 'video-exports');
+  if (!fs.existsSync(exportsDir)) return [];
+
+  return findFinalVideos(exportsDir)
+    .map((filePath) => {
+      const stats = fs.statSync(filePath);
+      const relativeDir = path.dirname(path.relative(exportsDir, filePath));
+      const label = relativeDir.split(path.sep).filter(Boolean).join(' · ') || path.basename(filePath);
+      const previewPath = path.join(path.dirname(filePath), 'thumbnails', 'thumb_002.jpg');
+      return {
+        id: crypto.createHash('sha1').update(filePath).digest('hex'),
+        label,
+        filePath,
+        createdAt: stats.mtime.toISOString(),
+        sizeBytes: stats.size,
+        thumbnailDataUrl: fs.existsSync(previewPath) ? `data:image/jpeg;base64,${fs.readFileSync(previewPath).toString('base64')}` : undefined
+      };
+    })
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export function deleteGeneratedVideo(filePath: string) {
+  fs.rmSync(assertGeneratedVideoPath(filePath), { force: true });
+}
+
+export function assertGeneratedVideoPath(filePath: string) {
+  const exportsDir = path.resolve(process.cwd(), 'data', 'video-exports');
+  const resolved = path.resolve(filePath);
+  const relative = path.relative(exportsDir, resolved);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.basename(resolved) !== 'affiliate-video-final.mp4') {
+    throw new Error('Video path is outside the generated video library.');
+  }
+  return resolved;
 }
 
 async function withThumbnail(asset: AssetLibraryItem): Promise<AssetLibraryItem> {
@@ -97,4 +134,19 @@ function formatDate(value: Date) {
   const day = String(value.getDate()).padStart(2, '0');
   const month = String(value.getMonth() + 1).padStart(2, '0');
   return `${day}${month}${value.getFullYear()}`;
+}
+
+function findFinalVideos(root: string) {
+  const files: string[] = [];
+  const pending = [root];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current) continue;
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) pending.push(fullPath);
+      else if (entry.isFile() && entry.name === 'affiliate-video-final.mp4') files.push(fullPath);
+    }
+  }
+  return files;
 }

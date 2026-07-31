@@ -30,6 +30,7 @@ import {
   saveProduct,
   saveUploadLog,
   unsavePost,
+  setGeminiApiKey,
   setOpenAiApiKey,
   setReadinessThresholds,
   setSetting,
@@ -44,8 +45,11 @@ import { fetchAndStoreThreads, importAndStoreThreadsPost, refreshPostReplies } f
 import { scanOpportunityInbox } from '@/server/services/opportunityScanService';
 import { getThreadsLoginStatus, openThreadsLoginSession } from '@/server/scraper/threadsScraper';
 import { renderVideoDraft } from '@/server/video/videoDraftService';
-import { deleteRegisteredAsset, listAssetsWithThumbnails, registerAsset } from '@/server/services/assetLibraryService';
-import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, Product, QuotaBlockedResult, ThreadsPost, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
+import { createTtsPreview, testGeminiConnection } from '@/server/video/ttsService';
+import { getVieneuLocalStatus, stopVieneuLocalService } from '@/server/video/vieneuLocalService';
+import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, registerAsset } from '@/server/services/assetLibraryService';
+import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
+import { isTtsVoiceForProvider } from '@/lib/tts';
 
 const isDev = !app.isPackaged;
 const shouldOpenDevTools = process.env.OPEN_DEVTOOLS === '1';
@@ -125,14 +129,24 @@ function registerIpc() {
   ipcMain.handle('settings:update', async (_event, settings: UpdateSettingsRequest) => {
     const apiKey = normalizeOpenAiApiKey(settings.openAiApiKey);
     if (apiKey) setOpenAiApiKey(apiKey);
+    const geminiApiKey = normalizeGeminiApiKey(settings.geminiApiKey);
+    if (geminiApiKey) setGeminiApiKey(geminiApiKey);
     if (typeof settings.openAiModel === 'string' && settings.openAiModel.trim()) setSetting('openai.model', settings.openAiModel.trim());
+    if (settings.ttsProvider === 'openai' || settings.ttsProvider === 'gemini' || settings.ttsProvider === 'vieneu') {
+      setSetting('video.tts_provider', settings.ttsProvider);
+    }
     if (settings.language === 'en' || settings.language === 'vi') setSetting('app.language', settings.language);
     if (typeof settings.autoScanEnabled === 'boolean') setSetting('app.auto_scan_enabled', String(settings.autoScanEnabled));
     if (typeof settings.autoScanMinutes === 'number' && settings.autoScanMinutes >= 15) setSetting('app.auto_scan_minutes', String(Math.round(settings.autoScanMinutes)));
     if (typeof settings.scanOnLaunch === 'boolean') setSetting('app.scan_on_launch', String(settings.scanOnLaunch));
     if (typeof settings.tiktokChannelName === 'string') setSetting('video.tiktok_channel_name', settings.tiktokChannelName.trim());
-    if (settings.defaultVoice === 'onyx' || settings.defaultVoice === 'nova' || settings.defaultVoice === 'shimmer') setSetting('video.default_voice', settings.defaultVoice);
-    if (typeof settings.defaultSpeed === 'number' && settings.defaultSpeed >= 0.9 && settings.defaultSpeed <= 1.3) setSetting('video.default_speed', String(settings.defaultSpeed));
+    if (settings.defaultVoice && isTtsVoiceForProvider(settings.ttsProvider ?? getAppSettings().ttsProvider, settings.defaultVoice)) {
+      setSetting('video.default_voice', settings.defaultVoice);
+    }
+    if (typeof settings.defaultSpeed === 'number' && Number.isFinite(settings.defaultSpeed)) {
+      const speed = Math.round(Math.min(Math.max(settings.defaultSpeed, 0.9), 1.3) * 100) / 100;
+      setSetting('video.default_speed', String(speed));
+    }
     if (typeof settings.transitionSoundEnabled === 'boolean') setSetting('video.transition_sound_enabled', String(settings.transitionSoundEnabled));
     if (typeof settings.postAgeHours === 'number' && settings.postAgeHours >= 1) setSetting('scraper.post_age_hours', String(Math.round(settings.postAgeHours)));
     if (settings.ttsInstructions && typeof settings.ttsInstructions === 'object') setTtsInstructions(settings.ttsInstructions);
@@ -142,12 +156,26 @@ function registerIpc() {
     if (settings.readinessThresholds && typeof settings.readinessThresholds === 'object') setReadinessThresholds(settings.readinessThresholds);
     if (typeof settings.dailyCostLimitUsd === 'number' && Number.isFinite(settings.dailyCostLimitUsd) && settings.dailyCostLimitUsd >= 0) setSetting('costs.daily_limit_usd', String(settings.dailyCostLimitUsd));
     if (settings.pricing && typeof settings.pricing === 'object') updatePricing(settings.pricing);
+    if (typeof settings.creativeAiEnabled === 'boolean') setSetting('features.creative_ai', String(settings.creativeAiEnabled));
+    if (settings.featureVisibility && typeof settings.featureVisibility === 'object') {
+      if (typeof settings.featureVisibility.opportunityDiscovery === 'boolean') setSetting('features.opportunity_discovery', String(settings.featureVisibility.opportunityDiscovery));
+      if (typeof settings.featureVisibility.affiliateWorkspace === 'boolean') setSetting('features.affiliate_workspace', String(settings.featureVisibility.affiliateWorkspace));
+      if (typeof settings.featureVisibility.assetLibrary === 'boolean') setSetting('features.asset_library', String(settings.featureVisibility.assetLibrary));
+      if (typeof settings.featureVisibility.resultsTracking === 'boolean') setSetting('features.results_tracking', String(settings.featureVisibility.resultsTracking));
+    }
     return getAppSettings();
   });
   ipcMain.handle('ai:test', async () => testOpenAIConnection());
+  ipcMain.handle('gemini:test', async () => testGeminiConnection());
+  ipcMain.handle('tts:local-status', async () => getVieneuLocalStatus());
+  ipcMain.handle('tts:preview', async (_event, request: TtsPreviewRequest) => createTtsPreview(request));
   ipcMain.handle('shell:open-openai-billing', async () => {
     await shell.openExternal('https://platform.openai.com/settings/organization/billing/overview');
     return { ok: true, message: 'Opening OpenAI Billing dashboard.' };
+  });
+  ipcMain.handle('shell:open-gemini-api-keys', async () => {
+    await shell.openExternal('https://aistudio.google.com/app/apikey');
+    return { ok: true, message: 'Opening Google AI Studio API keys.' };
   });
   ipcMain.handle('threads:login-status', async () => getThreadsLoginStatus());
   ipcMain.handle('shell:open-post-external', async (_event, post: ThreadsPost) => {
@@ -195,6 +223,12 @@ function registerIpc() {
     const error = await shell.openPath(asset.filePath);
     return error ? { ok: false, message: error } : { ok: true, message: 'Đang mở preview clip.' };
   });
+  ipcMain.handle('generated-videos:list', async () => listGeneratedVideos());
+  ipcMain.handle('generated-videos:open', async (_event, filePath: string) => {
+    const error = await shell.openPath(assertGeneratedVideoPath(filePath));
+    return error ? { ok: false, message: error } : { ok: true, message: 'Opening generated video.' };
+  });
+  ipcMain.handle('generated-videos:delete', async (_event, filePath: string) => deleteGeneratedVideo(filePath));
   ipcMain.handle('upload-log:list', async () => listUploadLogs());
   ipcMain.handle('upload-log:save', async (_event, entry: UploadLogEntry) => saveUploadLog(entry));
   ipcMain.handle('upload-log:delete', async (_event, id: string) => deleteUploadLog(id));
@@ -225,6 +259,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+app.on('before-quit', () => {
+  stopVieneuLocalService();
+});
+
 function normalizeOpenAiApiKey(value: unknown) {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim().replace(/^["']|["']$/g, '');
@@ -235,6 +273,15 @@ function normalizeOpenAiApiKey(value: unknown) {
 
   const key = trimmed.match(/(?:sk|sess)-[A-Za-z0-9_\-]+/);
   return key?.[0] ?? trimmed;
+}
+
+function normalizeGeminiApiKey(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim().replace(/^["']|["']$/g, '');
+  if (!trimmed) return '';
+
+  const assignment = trimmed.match(/GEMINI_API_KEY\s*=\s*["']?([^"'\s]+)["']?/i);
+  return assignment?.[1]?.trim() || trimmed;
 }
 
 async function pickVideoFile(title: string) {

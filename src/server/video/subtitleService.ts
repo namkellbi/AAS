@@ -15,7 +15,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,84,&H0000E7FF,&H00FFFFFF,&H00000000,&H7F000000,-1,0,0,0,100,100,0,0,1,6,0,2,60,60,640,163
+Style: Karaoke,Arial,82,&H0000E7FF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,5,1,2,60,60,640,163
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
@@ -28,7 +28,11 @@ export function buildKaraokeAss(words: WordTimestamp[]): string {
     const rawEnd = chunk[chunk.length - 1].end + CHUNK_TAIL_SECS;
     const end = Math.max(start + 0.05, nextStart !== undefined ? Math.min(rawEnd, nextStart) : rawEnd);
     const text = chunk
-      .map((word) => `{\\k${Math.max(1, Math.round((word.end - word.start) * 100))}}${escapeAssText(word.word)}`)
+      .map((word, wordIndex) => {
+        const holdUntil = chunk[wordIndex + 1]?.start ?? word.end;
+        const duration = Math.max(0.01, holdUntil - word.start);
+        return `{\\k${Math.max(1, Math.round(duration * 100))}}${escapeAssText(word.word)}`;
+      })
       .join(' ');
     return `Dialogue: 0,${toAssTime(start)},${toAssTime(end)},Karaoke,,0,0,0,,${text}`;
   });
@@ -74,8 +78,13 @@ function escapeAssText(value: string): string {
 }
 
 export function subtitlesFilterArg(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-  return `subtitles=filename='${normalized}'`;
+  const normalized = normalizeFilterPath(filePath);
+  const fontsDir = process.platform === 'win32' ? `:fontsdir='${normalizeFilterPath('C:\\Windows\\Fonts')}'` : '';
+  return `subtitles=filename='${normalized}'${fontsDir}`;
+}
+
+function normalizeFilterPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
 }
 
 let subtitlesFilterAvailable: boolean | null = null;

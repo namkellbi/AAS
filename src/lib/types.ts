@@ -5,8 +5,12 @@ export type ContentGoal = 'engagement' | 'affiliate';
 export type ThreadsReply = {
   id: string;
   author: string;
+  authorAvatarUrl?: string;
   content: string;
   likes: number;
+  replies?: number;
+  reposts?: number;
+  shares?: number;
 };
 
 export type ThreadsPost = {
@@ -65,7 +69,11 @@ export type CommentClassification = {
 export type SelectedReply = {
   id?: string;
   author?: string;
+  authorAvatarUrl?: string;
   likes?: number;
+  replies?: number;
+  reposts?: number;
+  shares?: number;
   content: string;
   type: string;
   whySelected: string;
@@ -185,11 +193,71 @@ export type SavedPost = {
 };
 
 export type TtsSegmentKind = 'hook' | 'post' | 'reply' | 'transition' | 'solution' | 'cta';
+export type TtsProvider = 'openai' | 'gemini' | 'vieneu';
+export type OpenAiTtsVoice = 'onyx' | 'nova' | 'shimmer';
+export type GeminiTtsVoice =
+  | 'Zephyr'
+  | 'Puck'
+  | 'Charon'
+  | 'Kore'
+  | 'Fenrir'
+  | 'Leda'
+  | 'Orus'
+  | 'Aoede'
+  | 'Callirrhoe'
+  | 'Autonoe'
+  | 'Enceladus'
+  | 'Iapetus'
+  | 'Umbriel'
+  | 'Algieba'
+  | 'Despina'
+  | 'Erinome'
+  | 'Algenib'
+  | 'Rasalgethi'
+  | 'Laomedeia'
+  | 'Achernar'
+  | 'Alnilam'
+  | 'Schedar'
+  | 'Gacrux'
+  | 'Pulcherrima'
+  | 'Achird'
+  | 'Zubenelgenubi'
+  | 'Vindemiatrix'
+  | 'Sadachbia'
+  | 'Sadaltager'
+  | 'Sulafat';
+export type VieneuTtsVoice =
+  | 'Minh Đức'
+  | 'Phạm Tuyên'
+  | 'Thái Sơn'
+  | 'Xuân Vĩnh'
+  | 'Thanh Bình'
+  | 'Trúc Ly'
+  | 'Ngọc Linh'
+  | 'Đoan Trang'
+  | 'Mai Anh'
+  | 'Thục Đoan'
+  | 'Minh Triết'
+  | 'Thùy Dung'
+  | 'Quang Sơn'
+  | 'Ngọc Trân'
+  | 'Ngoc-Huyen-Clone';
+export type TtsVoice = OpenAiTtsVoice | GeminiTtsVoice | VieneuTtsVoice;
+
+export type FeatureVisibility = {
+  opportunityDiscovery: boolean;
+  affiliateWorkspace: boolean;
+  assetLibrary: boolean;
+  resultsTracking: boolean;
+};
 
 export type AppSettings = {
   openAiApiKeySet: boolean;
   maskedOpenAiApiKey?: string;
   openAiModel: string;
+  geminiApiKeySet: boolean;
+  maskedGeminiApiKey?: string;
+  ttsProvider: TtsProvider;
   threadsSessionExists: boolean;
   threadsAccountName?: string;
   language: 'en' | 'vi';
@@ -197,7 +265,7 @@ export type AppSettings = {
   autoScanMinutes: number;
   scanOnLaunch: boolean;
   tiktokChannelName: string;
-  defaultVoice: 'onyx' | 'nova' | 'shimmer';
+  defaultVoice: TtsVoice;
   defaultSpeed: number;
   transitionSoundEnabled: boolean;
   postAgeHours: number;
@@ -213,17 +281,21 @@ export type AppSettings = {
     ttsPerMillionChars: number;
     whisperPerMinute: number;
   };
+  creativeAiEnabled: boolean;
+  featureVisibility: FeatureVisibility;
 };
 
 export type UpdateSettingsRequest = {
   openAiApiKey?: string;
   openAiModel?: string;
+  geminiApiKey?: string;
+  ttsProvider?: TtsProvider;
   language?: 'en' | 'vi';
   autoScanEnabled?: boolean;
   autoScanMinutes?: number;
   scanOnLaunch?: boolean;
   tiktokChannelName?: string;
-  defaultVoice?: 'onyx' | 'nova' | 'shimmer';
+  defaultVoice?: TtsVoice;
   defaultSpeed?: number;
   transitionSoundEnabled?: boolean;
   postAgeHours?: number;
@@ -239,11 +311,23 @@ export type UpdateSettingsRequest = {
     ttsPerMillionChars: number;
     whisperPerMinute: number;
   }>;
+  creativeAiEnabled?: boolean;
+  featureVisibility?: Partial<FeatureVisibility>;
 };
 
 export type ServiceHealth = {
   ok: boolean;
   message: string;
+};
+
+export type LocalTtsStatus = ServiceHealth & {
+  installed: boolean;
+  modelReady: boolean;
+  running: boolean;
+  loaded?: boolean;
+  version?: string;
+  backend?: string;
+  voices: Array<{ id: string; label: string; description: string }>;
 };
 
 export type VideoDraftVariant = {
@@ -274,6 +358,21 @@ export type VideoDraftResult = ServiceHealth & {
 export type VideoDraftProgress = {
   percent: number;
   message: string;
+};
+
+export type TtsPreviewRequest = {
+  text: string;
+  provider: TtsProvider;
+  voice: TtsVoice;
+  speed: number;
+  instructions: string;
+};
+
+export type TtsPreviewResult = ServiceHealth & {
+  audioDataUrl?: string;
+  cached?: boolean;
+  model: string;
+  source: 'openai_api' | 'gemini_api' | 'local_vieneu';
 };
 
 export type FetchRequest = {
@@ -349,6 +448,15 @@ export type AssetLibraryItem = {
   durationSecs: number;
   timesUsed: number;
   lastUsedAt?: string;
+  thumbnailDataUrl?: string;
+};
+
+export type GeneratedVideoItem = {
+  id: string;
+  label: string;
+  filePath: string;
+  createdAt: string;
+  sizeBytes: number;
   thumbnailDataUrl?: string;
 };
 
@@ -429,7 +537,11 @@ export type DesktopAPI = {
   getSettings: () => Promise<AppSettings>;
   updateSettings: (settings: UpdateSettingsRequest) => Promise<AppSettings>;
   testOpenAI: () => Promise<ServiceHealth>;
+  testGemini: () => Promise<ServiceHealth>;
+  getLocalTtsStatus: () => Promise<LocalTtsStatus>;
+  previewTts: (request: TtsPreviewRequest) => Promise<TtsPreviewResult>;
   openOpenAiBilling: () => Promise<ServiceHealth>;
+  openGeminiApiKeys: () => Promise<ServiceHealth>;
   getThreadsLoginStatus: () => Promise<ServiceHealth>;
   openPostExternal: (post: ThreadsPost) => Promise<ServiceHealth>;
   renderVideoDraft: (request: VideoDraftRequest) => Promise<VideoDraftResult>;
@@ -439,6 +551,9 @@ export type DesktopAPI = {
   addAsset: (type: AssetType) => Promise<AssetLibraryItem | null>;
   deleteAsset: (id: string) => Promise<void>;
   openAssetPreview: (id: string) => Promise<ServiceHealth>;
+  getGeneratedVideos: () => Promise<GeneratedVideoItem[]>;
+  openGeneratedVideo: (filePath: string) => Promise<ServiceHealth>;
+  deleteGeneratedVideo: (filePath: string) => Promise<void>;
   getUploadLogs: () => Promise<UploadLogEntry[]>;
   saveUploadLog: (entry: UploadLogEntry) => Promise<UploadLogEntry>;
   deleteUploadLog: (id: string) => Promise<void>;

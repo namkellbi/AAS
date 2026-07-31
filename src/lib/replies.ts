@@ -10,9 +10,27 @@ export function isUsefulReplyContent(content: string) {
 
 export function filterUsefulReplies(replies: ThreadsReply[]) {
   const seen = new Set<string>();
-  return replies.filter((reply) => {
-    if (!reply?.id || seen.has(reply.id) || !isUsefulReplyContent(reply.content)) return false;
+  return replies.flatMap((reply) => {
+    if (!reply?.id || seen.has(reply.id)) return [];
+    const content = sanitizeThreadsReplyContent(reply.content);
+    if (!isUsefulReplyContent(content)) return [];
     seen.add(reply.id);
-    return true;
+    return [{ ...reply, content }];
   });
+}
+
+export function sanitizeThreadsReplyContent(content: string) {
+  return content
+    // Threads sometimes exposes action controls as one unbroken accessibility
+    // string appended to the reply body, e.g.
+    // "TranslateLike304Comment3Repost1Share".
+    .replace(
+      /\s*(?:(?:translate|dịch)\s*)?like(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*comments?(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*reposts?(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*shares?(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*$/iu,
+      ''
+    )
+    .replace(/^\s*(?:\d+\s*(?:giây|phút|giờ|ngày|tuần|tháng|năm)\s*[·•]\s*)/iu, '')
+    .replace(/^\s*[·•.]\s*(?:author|tác\s+giả)\s*[:·•.\-–—]?\s*/iu, '')
+    .replace(/^\s*(?:author|tác\s+giả)\s*[:·•.\-–—]\s*/iu, '')
+    .replace(/^\s*(?:author|tác\s+giả)\s+(?!của\b)/iu, '')
+    .trim();
 }

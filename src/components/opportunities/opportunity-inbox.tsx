@@ -1,12 +1,19 @@
 'use client';
 
-import { Bookmark, ExternalLink, Eye, Lightbulb, Link2, Radar, Sparkles, Target, TrendingUp, Video, Wand2 } from 'lucide-react';
+import { Bookmark, CheckCircle2, Circle, ExternalLink, Eye, Lightbulb, Link2, Radar, Sparkles, Target, TrendingUp, Video, Wand2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { TranslationCopy } from '@/lib/i18n';
 import type { AIAnalysis, ContentGoal, CreateFromLinkProgress, OpportunityScanProgress, ThreadsPost, UploadLogEntry } from '@/lib/types';
 import { cn } from '@/lib/utils';
+
+export type SetupState = {
+  apiKey: boolean;
+  threadsLogin: boolean;
+  background: boolean;
+  keywords: boolean;
+};
 
 export function OpportunityInbox({
   analyses,
@@ -21,10 +28,12 @@ export function OpportunityInbox({
   scanGoal,
   scanProgress,
   scanSummary,
+  setup,
   onCreate,
   onCreateFromLink,
   onCreateLinkUrl,
   onInspect,
+  onNavigate,
   onOpenLink,
   onSave,
   onScan,
@@ -42,10 +51,12 @@ export function OpportunityInbox({
   scanGoal: ContentGoal;
   scanProgress: OpportunityScanProgress | null;
   scanSummary: { newPosts: number; seenPosts: number } | null;
+  setup: SetupState;
   onCreate: (post: ThreadsPost) => void;
   onCreateFromLink: () => void;
   onCreateLinkUrl: (url: string) => void;
   onInspect: (post: ThreadsPost) => void;
+  onNavigate: (view: string) => void;
   onOpenLink: (post: ThreadsPost) => void;
   onSave: (post: ThreadsPost) => void;
   onScan: () => void;
@@ -59,13 +70,53 @@ export function OpportunityInbox({
   const watchCount = shortlist.filter((post) => analyses[post.id]?.verdict !== 'make_now').length;
   const readyCount = shortlist.filter((post) => Boolean(analyses[post.id]?.videoScript.postReadVersion)).length;
 
+  const setupItems = [
+    { ok: setup.apiKey, label: copy.setupOpenAiKey, target: 'settings', optional: false },
+    { ok: setup.threadsLogin, label: copy.setupThreads, target: 'settings', optional: false },
+    { ok: setup.background, label: copy.setupBackground, target: 'assets', optional: false },
+    { ok: setup.keywords, label: copy.setupKeywords, target: 'keywords', optional: true }
+  ];
+  const setupDone = setupItems.every((item) => item.ok);
+
+  const flowSteps = [
+    { step: 1, title: copy.flowStep1Title, description: copy.flowStep1Desc },
+    { step: 2, title: copy.flowStep2Title, description: copy.flowStep2Desc },
+    { step: 3, title: copy.flowStep3Title, description: copy.flowStep3Desc }
+  ];
+
   return (
     <div className="space-y-4">
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <InboxMetric icon={<Target className="size-4" />} label={copy.makeNow} value={makeNowCount} tone="success" />
-        <InboxMetric icon={<Eye className="size-4" />} label={copy.watch} value={watchCount} tone="warning" />
-        <InboxMetric icon={<Video className="size-4" />} label={copy.readyToCreate} value={readyCount} />
-        <InboxMetric icon={<TrendingUp className="size-4" />} label={copy.trackedResults} value={logs.length} />
+      {!setupDone ? (
+        <section className="rounded-lg border border-accent/40 bg-accent/5 p-4">
+          <h2 className="text-base font-semibold text-text">{copy.setupChecklist}</h2>
+          <p className="mt-1 text-sm text-muted">{copy.setupChecklistHelp}</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {setupItems.map((item) => (
+              <div key={item.label} className="flex items-center justify-between gap-3 rounded-md border border-border bg-panel p-3">
+                <div className="flex min-w-0 items-center gap-2 text-sm">
+                  {item.ok ? <CheckCircle2 className="size-4 shrink-0 text-emerald-300" /> : <Circle className="size-4 shrink-0 text-muted" />}
+                  <span className={cn('truncate', item.ok ? 'text-muted line-through' : 'text-text')}>{item.label}</span>
+                  {item.optional ? <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted">{copy.setupOptional}</span> : null}
+                </div>
+                {!item.ok ? (
+                  <Button className="h-8 shrink-0 px-3 text-xs" onClick={() => onNavigate(item.target)}>
+                    {copy.setupFix}
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="grid gap-3 md:grid-cols-3">
+        {flowSteps.map((item) => (
+          <div key={item.step} className="rounded-lg border border-border bg-panel p-4">
+            <div className="flex size-6 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">{item.step}</div>
+            <div className="mt-2 text-sm font-semibold text-text">{item.title}</div>
+            <div className="mt-1 text-xs leading-5 text-muted">{item.description}</div>
+          </div>
+        ))}
       </section>
 
       <section className="rounded-lg border border-border bg-panel p-4">
@@ -183,10 +234,19 @@ export function OpportunityInbox({
           <div className="rounded-lg border border-border bg-panel p-8 text-center">
             <Sparkles className="mx-auto size-5 text-accent" />
             <div className="mt-3 text-sm font-medium text-text">{copy.noShortlistYet}</div>
-            <div className="mt-1 text-sm text-muted">{copy.noShortlistHelp}</div>
+            <div className="mt-1 text-sm text-muted">{setupDone ? copy.noShortlistHelp : copy.setupChecklistHelp}</div>
           </div>
         ) : null}
       </section>
+
+      {shortlist.length || logs.length ? (
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <InboxMetric icon={<Target className="size-4" />} label={copy.makeNow} value={makeNowCount} tone="success" />
+          <InboxMetric icon={<Eye className="size-4" />} label={copy.watch} value={watchCount} tone="warning" />
+          <InboxMetric icon={<Video className="size-4" />} label={copy.readyToCreate} value={readyCount} />
+          <InboxMetric icon={<TrendingUp className="size-4" />} label={copy.trackedResults} value={logs.length} />
+        </section>
+      ) : null}
     </div>
   );
 }

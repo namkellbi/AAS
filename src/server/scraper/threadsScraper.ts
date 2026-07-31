@@ -269,7 +269,7 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
   await page.waitForTimeout(1400);
   await page.mouse.wheel(0, 700);
   await page.waitForTimeout(700);
-  return page.evaluate((rootUrl) => {
+  const collectVisibleReplies = () => page.evaluate((rootUrl) => {
     const rootId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0] ?? '';
     const anchors = Array.from(document.querySelectorAll('a'))
       .map((anchor) => anchor as HTMLAnchorElement)
@@ -293,7 +293,16 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
         }
       }
       if (!container) continue;
-      const lines = container.innerText.split('\n').map((line) => line.trim()).filter(Boolean);
+      // A quoted/embedded Threads card has its own permalink inside the direct
+      // reply. Its anchor must not be promoted to a top-level reply.
+      if (isNestedQuotedPost(anchor, container, match[2], rootId)) continue;
+
+      // Keep only the direct reply's text. Otherwise an outer reply containing
+      // a quote card inherits all text/metrics from the embedded post.
+      const lines = directReplyText(container, match[2])
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
       const timestampIndex = lines.findIndex(isTimestampLine);
       const contentStart = timestampIndex >= 0 ? timestampIndex + 1 : 1;
       const translateIndex = lines.findIndex((line, index) => index >= contentStart && /^(translate|dịch)$/i.test(line));
@@ -301,45 +310,193 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
       const contentEnd = translateIndex > contentStart ? translateIndex : metricStart > contentStart ? metricStart : lines.length;
       const content = lines
         .slice(contentStart, contentEnd)
-        .filter((line) => !isTimestampLine(line) && !isMetricLine(line) && !/^(more|xem thêm|translate|dịch)$/i.test(line) && line !== match[1])
+        .filter((line) => !isTimestampLine(line) && !isMetricLine(line) && !isAuthorLabel(line) && !/^(more|xem thêm|translate|dịch)$/i.test(line) && line !== match[1])
         .join(' ')
+        .replace(
+          /\s*(?:(?:translate|dịch)\s*)?like(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*comments?(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*reposts?(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*shares?(?:\d+(?:[.,]\d+)?\s*[KMB]?)?\s*$/iu,
+          ''
+        )
+        .replace(/^\s*[·•.]\s*(?:author|tác\s+giả)\s*[:·•.\-–—]?\s*/iu, '')
         .trim();
       if (!isUsefulContent(content)) continue;
-      const likeButtonText = container.querySelector('svg[aria-label="Like"]')?.closest('[role="button"]')?.textContent ?? '';
-      const likes = firstCompactNumber(likeButtonText);
+      const likes = interactionMetric(container, ['like', 'thich']) ?? 0;
+      const replyCount = interactionMetric(container, ['reply', 'comment', 'tra loi', 'binh luan']);
+      const reposts = interactionMetric(container, ['repost', 'dang lai']);
+      const shares = interactionMetric(container, ['share', 'send', 'chia se', 'gui']);
+      const authorAvatarUrl = findAuthorAvatar(container, match[1]);
       seen.add(match[2]);
-      replies.push({ id: match[2], author: match[1], content: content.slice(0, 500), likes });
-      if (replies.length >= 10) break;
+      replies.push({
+        id: match[2],
+        author: match[1],
+        ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
+        content: content.slice(0, 500),
+        likes,
+        ...(replyCount === undefined ? {} : { replies: replyCount }),
+        ...(reposts === undefined ? {} : { reposts }),
+        ...(shares === undefined ? {} : { shares })
+      });
+      if (replies.length >= 20) break;
     }
     return replies.sort((a, b) => b.likes - a.likes);
 
+    function findAuthorAvatar(container: HTMLElement, author: string) {
+      const images = Array.from(container.querySelectorAll('img[src]')) as HTMLImageElement[];
+      const expectedAlt = `${author.toLocaleLowerCase()}'s profile picture`;
+      const image = images.find((candidate) => (candidate.alt ?? '').toLocaleLowerCase() === expectedAlt)
+        ?? images.find((candidate) => {
+          const alt = (candidate.alt ?? '').toLocaleLowerCase();
+          return alt.includes(author.toLocaleLowerCase()) && alt.includes('profile picture') && candidate.width >= 30;
+        })
+        ?? images.find((candidate) => (candidate.alt ?? '').toLocaleLowerCase().includes('profile picture') && candidate.width >= 30 && candidate.width <= 80);
+      return image?.currentSrc || image?.src || undefined;
+    }
+
+    function isNestedQuotedPost(
+      anchor: HTMLAnchorElement,
+      container: HTMLElement,
+      candidateId: string,
+      rootPostId: string
+    ) {
+      let ancestor = container.parentElement;
+      for (let depth = 0; ancestor && depth < 8; depth += 1) {
+        if (ancestor.matches('[data-pressable-container="true"]')) {
+          const ancestorPostIds = Array.from(ancestor.querySelectorAll('a[href*="/post/"]'))
+            .map((link) => (link as HTMLAnchorElement).href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
+            .filter((id): id is string => Boolean(id));
+          if (ancestorPostIds.some((id) => id !== candidateId && id !== rootPostId)) {
+            return true;
+          }
+        }
+        ancestor = ancestor.parentElement;
+      }
+      return false;
+    }
+
+    function directReplyText(container: HTMLElement, candidateId: string) {
+      const clone = container.cloneNode(true) as HTMLElement;
+      const nestedCards = Array.from(
+        clone.querySelectorAll('[data-pressable-container="true"]')
+      ) as HTMLElement[];
+      for (const nested of nestedCards) {
+        const nestedPostIds = Array.from(nested.querySelectorAll('a[href*="/post/"]'))
+          .map((link) => (link as HTMLAnchorElement).href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
+          .filter((id): id is string => Boolean(id));
+        if (nestedPostIds.length && !nestedPostIds.includes(candidateId)) nested.remove();
+      }
+      return clone.innerText ?? clone.textContent ?? '';
+    }
+
+    function interactionMetric(container: HTMLElement, labels: string[]) {
+      const icon = Array.from(container.querySelectorAll('svg[aria-label]')).find((candidate) => {
+        const label = normalizeLabel(candidate.getAttribute('aria-label') ?? '');
+        return labels.some((expected) => label.includes(expected));
+      });
+      if (!icon) return undefined;
+      const buttonText = icon.closest('[role="button"]')?.textContent ?? '';
+      return firstCompactNumber(`${buttonText} ${icon.getAttribute('aria-label') ?? ''}`);
+    }
+
+    function normalizeLabel(value: string) {
+      return value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .toLowerCase();
+    }
+
     function compactToNumber(value: string) {
       const cleaned = value.replace(/\s+/g, '').toUpperCase();
-      if (!/^\d+(?:\.\d+)?[KMB]?$/.test(cleaned)) return -1;
-      const number = Number.parseFloat(cleaned);
-      if (cleaned.endsWith('B')) return Math.round(number * 1_000_000_000);
-      if (cleaned.endsWith('M')) return Math.round(number * 1_000_000);
-      if (cleaned.endsWith('K')) return Math.round(number * 1_000);
+      if (!/^\d+(?:[.,]\d+)?[KMB]?$/.test(cleaned)) return -1;
+      const suffix = cleaned.match(/[KMB]$/)?.[0];
+      const numericPart = suffix ? cleaned.slice(0, -1).replace(',', '.') : cleaned.replace(/[.,](?=\d{3}$)/, '');
+      const number = Number.parseFloat(numericPart);
+      if (suffix === 'B') return Math.round(number * 1_000_000_000);
+      if (suffix === 'M') return Math.round(number * 1_000_000);
+      if (suffix === 'K') return Math.round(number * 1_000);
       return Math.round(number);
     }
 
     function firstCompactNumber(value: string) {
-      const match = value.match(/\d+(?:\.\d+)?\s*[KMB]?/i);
+      const match = value.match(/\d+(?:[.,]\d+)?\s*[KMB]?/i);
       return match ? Math.max(compactToNumber(match[0]), 0) : 0;
     }
 
     function isTimestampLine(value: string) {
-      return /^\d+[smhdw]$/i.test(value) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(value);
+      return /^\d+[smhdw]$/i.test(value)
+        || /^\d+\s*(?:giây|phút|giờ|ngày|tuần|tháng|năm)$/iu.test(value)
+        || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(value);
     }
 
     function isMetricLine(value: string) {
       return /^\d+(?:\.\d+)?\s*[KMB]?$/i.test(value);
     }
 
+    function isAuthorLabel(value: string) {
+      return /^(?:author|tác\s+giả)$/iu.test(value) || /^[·•.]\s*(?:author|tác\s+giả)$/iu.test(value);
+    }
+
     function isUsefulContent(value: string) {
       return value.length >= 3 && !isTimestampLine(value) && !isMetricLine(value);
     }
   }, postUrl);
+
+  const collected = new Map<string, ThreadsReply>();
+  let unchangedPasses = 0;
+  for (let pass = 0; pass < 6 && collected.size < 20; pass += 1) {
+    const previousSize = collected.size;
+    for (const reply of await collectVisibleReplies()) {
+      const existing = collected.get(reply.id);
+      collected.set(reply.id, existing ? {
+        ...existing,
+        ...reply,
+        likes: Math.max(existing.likes, reply.likes),
+        replies: maxKnownMetric(existing.replies, reply.replies),
+        reposts: maxKnownMetric(existing.reposts, reply.reposts),
+        shares: maxKnownMetric(existing.shares, reply.shares)
+      } : reply);
+    }
+    unchangedPasses = collected.size === previousSize ? unchangedPasses + 1 : 0;
+    if (unchangedPasses >= 2) break;
+    await page.mouse.wheel(0, 900);
+    await page.waitForTimeout(450);
+  }
+  const sorted = Array.from(collected.values()).sort((left, right) => right.likes - left.likes).slice(0, 20);
+  return await embedReplyAvatars(page, sorted);
+
+  function maxKnownMetric(left?: number, right?: number) {
+    if (left === undefined) return right;
+    if (right === undefined) return left;
+    return Math.max(left, right);
+  }
+}
+
+async function embedReplyAvatars(page: Page, replies: ThreadsReply[]): Promise<ThreadsReply[]> {
+  const cache = new Map<string, Promise<string | undefined>>();
+  return Promise.all(replies.map(async (reply) => {
+    const avatarUrl = reply.authorAvatarUrl;
+    if (!avatarUrl || avatarUrl.startsWith('data:')) return reply;
+    let embedded = cache.get(avatarUrl);
+    if (!embedded) {
+      embedded = (async () => {
+        try {
+          const response = await page.context().request.get(avatarUrl, {
+            headers: { Referer: 'https://www.threads.com/' },
+            timeout: 10_000
+          });
+          if (!response.ok()) return undefined;
+          const body = await response.body();
+          if (!body.length || body.length > 500_000) return undefined;
+          const contentType = response.headers()['content-type']?.split(';')[0] || 'image/jpeg';
+          return `data:${contentType};base64,${body.toString('base64')}`;
+        } catch {
+          return undefined;
+        }
+      })();
+      cache.set(avatarUrl, embedded);
+    }
+    const dataUrl = await embedded;
+    return dataUrl ? { ...reply, authorAvatarUrl: dataUrl } : reply;
+  }));
 }
 
 export async function scrapeThreadsPostReplies(postUrl: string): Promise<ThreadsReply[]> {

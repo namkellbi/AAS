@@ -1,7 +1,8 @@
 import OpenAI from 'openai';
+import { sanitizeThreadsReplyContent } from '@/lib/replies';
 import type { AIAnalysis, ContentGoal, ThreadsPost } from '@/lib/types';
 import { nowIso } from '@/lib/utils';
-import { getAffiliatePerformanceContext, getOpenAiApiKey, getOpenAiModel, listProducts, logApiUsage, storeAnalysis } from '@/server/db/client';
+import { getAffiliatePerformanceContext, getCreativeAiEnabled, getOpenAiApiKey, getOpenAiModel, listProducts, logApiUsage, storeAnalysis } from '@/server/db/client';
 import { withRetry } from '@/server/utils/withRetry';
 
 const spokenRewriteRules = `Quy tắc spoken rewrite (bắt buộc cho mọi field trong video_script — đây là văn NÓI để TTS đọc thành tiếng, không phải văn viết):
@@ -47,6 +48,7 @@ ${spokenRewriteRules}`;
 export async function analyzeAffiliateOpportunity(post: ThreadsPost, goal: ContentGoal = 'affiliate'): Promise<AIAnalysis> {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) throw new Error('OpenAI API key is missing. Add it in Settings before running AI analysis.');
+  const useOriginalPostReadOnly = !getCreativeAiEnabled();
 
   const catalog = goal === 'affiliate' ? listProducts('active') : [];
   const catalogIds = new Set(catalog.map((product) => product.id));
@@ -69,6 +71,10 @@ export async function analyzeAffiliateOpportunity(post: ThreadsPost, goal: Conte
                 ? 'Đánh giá tiềm năng ENGAGEMENT (nuôi kênh, kéo comment/follow, không gắn sản phẩm) và chuẩn bị dữ liệu dựng TikTok comment compilation.'
                 : 'Phân tích cơ hội affiliate cho thị trường Việt Nam và chuẩn bị dữ liệu dựng TikTok comment compilation.',
             content_goal: goal,
+            original_post_read_only: useOriginalPostReadOnly,
+            temporary_copy_disable_instruction: useOriginalPostReadOnly
+              ? 'Keep video_script.post_read_version exactly equal to post.content. Return empty hooks, ctas, tiktok_caption, solution_script, video_script.transition_line, video_script.solution_text, video_script.cta_text, and video_script.caption_variants.'
+              : undefined,
             required_schema: {
               verdict: 'make_now | watch | skip',
               confidence_score: '0-100',
@@ -176,7 +182,7 @@ export async function analyzeAffiliateOpportunity(post: ThreadsPost, goal: Conte
   }
   const raw = response.choices[0]?.message?.content ?? '{}';
   const parsed = JSON.parse(raw) as Record<string, unknown>;
-  const analysis = normalizeAnalysis(post.id, parsed, goal, catalogIds);
+  const analysis = normalizeAnalysis(post, parsed, goal, catalogIds, useOriginalPostReadOnly);
   storeAnalysis(analysis);
   return analysis;
 }
@@ -202,10 +208,19 @@ export async function testOpenAIConnection() {
   }
 }
 
-function normalizeAnalysis(postId: string, parsed: Record<string, unknown>, goal: ContentGoal = 'affiliate', catalogIds: Set<string> = new Set()): AIAnalysis {
+function normalizeAnalysis(post: ThreadsPost, parsed: Record<string, unknown>, goal: ContentGoal = 'affiliate', catalogIds: Set<string> = new Set(), useOriginalPostReadOnly = true): AIAnalysis {
   const matchedProductId = optionalString(parsed.matched_product_id);
+  const videoScript = useOriginalPostReadOnly
+    ? {
+        postReadVersion: post.content,
+        transitionLine: '',
+        solutionText: '',
+        ctaText: '',
+        captionVariants: []
+      }
+    : normalizeVideoScript(parsed.video_script, parsed.solution_script);
   return {
-    postId,
+    postId: post.id,
     verdict: verdictValue(parsed.verdict, parsed.affiliate_fit_score),
     confidenceScore: numberValue(parsed.confidence_score, 70),
     emotion: stringValue(parsed.emotion, 'curiosity'),
@@ -215,8 +230,8 @@ function normalizeAnalysis(postId: string, parsed: Record<string, unknown>, goal
     affiliateProducts: stringArray(parsed.affiliate_products).slice(0, 8),
     contentAngle: stringValue(parsed.content_angle, 'relatable product discovery'),
     whyViral: stringValue(parsed.why_viral, 'Bài viết nêu một tình huống cụ thể và dễ đồng cảm.'),
-    hooks: stringArray(parsed.hooks).slice(0, 6),
-    ctas: stringArray(parsed.ctas).slice(0, 6),
+    hooks: useOriginalPostReadOnly ? [] : stringArray(parsed.hooks).slice(0, 6),
+    ctas: useOriginalPostReadOnly ? [] : stringArray(parsed.ctas).slice(0, 6),
     relatabilityScore: numberValue(parsed.relatability_score, 70),
     controversyScore: numberValue(parsed.controversy_score, 10),
     affiliateFitScore: numberValue(parsed.affiliate_fit_score, 0),
@@ -224,18 +239,18 @@ function normalizeAnalysis(postId: string, parsed: Record<string, unknown>, goal
     situations: stringArray(parsed.situations).slice(0, 8),
     demoAngle: stringValue(parsed.demo_angle, ''),
     contentFormat: stringValue(parsed.content_format, ''),
-    solutionScript: stringValue(parsed.solution_script, ''),
+    solutionScript: useOriginalPostReadOnly ? '' : stringValue(parsed.solution_script, ''),
     productSearchKeywords: stringArray(parsed.product_search_keywords).slice(0, 8),
     scriptOutline: stringArray(parsed.script_outline).slice(0, 8),
     rejectReason: optionalString(parsed.reject_reason),
     commentClassifications: normalizeClassifications(parsed.comment_classifications),
-    bestReplies: normalizeBestReplies(parsed.best_replies),
+    bestReplies: normalizeBestReplies(parsed.best_replies, post.topReplies),
     videoPotentialScore: numberValue(parsed.video_potential_score, 0),
     videoPotentialBreakdown: normalizeVideoPotentialBreakdown(parsed.video_potential_breakdown),
-    tiktokCaption: stringValue(parsed.tiktok_caption, ''),
+    tiktokCaption: useOriginalPostReadOnly ? '' : stringValue(parsed.tiktok_caption, ''),
     hashtags: stringArray(parsed.hashtags).slice(0, 8),
     marketplaceKeywords: normalizeProductKeywords(parsed.product_keywords),
-    videoScript: normalizeVideoScript(parsed.video_script, parsed.solution_script),
+    videoScript,
     contentGoal: goal,
     matchedProductId: matchedProductId && catalogIds.has(matchedProductId) ? matchedProductId : undefined,
     createdAt: nowIso()
@@ -253,12 +268,30 @@ function normalizeClassifications(value: unknown): AIAnalysis['commentClassifica
     .slice(0, 10);
 }
 
-function normalizeBestReplies(value: unknown): AIAnalysis['bestReplies'] {
+function normalizeBestReplies(value: unknown, sourceReplies: ThreadsPost['topReplies']): AIAnalysis['bestReplies'] {
   if (!Array.isArray(value)) return [];
   return value
-    .map((item) => {
+    .flatMap((item) => {
       const record = objectValue(item);
-      return { id: optionalString(record.reply_id), content: stringValue(record.content, ''), type: stringValue(record.type, 'PAIN_POINT'), whySelected: stringValue(record.why_selected, '') };
+      const id = optionalString(record.reply_id);
+      const content = sanitizeThreadsReplyContent(stringValue(record.content, ''));
+      const source = sourceReplies.find((reply) => reply.id === id)
+        ?? sourceReplies.find((reply) => sanitizeThreadsReplyContent(reply.content) === content);
+      // Never accept a reply hallucinated or rewritten by the model. Video
+      // narration must be backed by a direct reply collected from Threads.
+      if (!source) return [];
+      return [{
+        id: source.id,
+        author: source.author,
+        authorAvatarUrl: source.authorAvatarUrl,
+        likes: source.likes,
+        replies: source.replies,
+        reposts: source.reposts,
+        shares: source.shares,
+        content: sanitizeThreadsReplyContent(source.content),
+        type: stringValue(record.type, 'PAIN_POINT'),
+        whySelected: stringValue(record.why_selected, '')
+      }];
     })
     .filter((item) => item.content)
     .slice(0, 6);

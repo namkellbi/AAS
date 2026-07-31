@@ -10,13 +10,18 @@ import type { AIAnalysis, ThreadsPost } from '@/lib/types';
 export function AnalysisPanel({
   post,
   analysis,
-  copy
+  copy,
+  creativeAiEnabled
 }: {
   post?: ThreadsPost;
   analysis?: AIAnalysis | null;
   copy: TranslationCopy;
+  creativeAiEnabled: boolean;
 }) {
   const [showTechnicalScores, setShowTechnicalScores] = useState(false);
+  const useOriginalPostReadOnly = !creativeAiEnabled;
+  const displayedHooks = useOriginalPostReadOnly ? [] : analysis?.hooks ?? [];
+  const displayedCtas = useOriginalPostReadOnly ? [] : analysis?.ctas ?? [];
   if (!post) {
     return (
       <aside className="h-screen w-[390px] shrink-0 border-l border-border bg-[#0c0f13] p-5">
@@ -90,11 +95,11 @@ export function AnalysisPanel({
         ) : null}
 
         <PanelBlock icon={<Lightbulb className="size-4" />} title={copy.hooks}>
-          <PillList items={analysis?.hooks ?? []} empty={copy.noHooks} />
+          <PillList items={displayedHooks} empty={copy.noHooks} />
         </PanelBlock>
 
         <PanelBlock icon={<ExternalLink className="size-4" />} title={copy.ctaSuggestions}>
-          <PillList items={analysis?.ctas ?? []} empty={copy.noCtas} />
+          <PillList items={displayedCtas} empty={copy.noCtas} />
         </PanelBlock>
 
         <button className="flex w-full items-center justify-between rounded-lg border border-border bg-panel px-4 py-3 text-left text-sm font-semibold text-text transition hover:border-accent/50" onClick={() => setShowTechnicalScores((current) => !current)}>

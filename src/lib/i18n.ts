@@ -270,7 +270,23 @@ type TranslationKey =
   | 'dailyCostLimit'
   | 'quotaConfirm'
   | 'pricingTable'
-  | 'pricingTableHelp';
+  | 'pricingTableHelp'
+  | 'navDaily'
+  | 'navAdvanced'
+  | 'setupChecklist'
+  | 'setupChecklistHelp'
+  | 'setupOpenAiKey'
+  | 'setupThreads'
+  | 'setupBackground'
+  | 'setupKeywords'
+  | 'setupOptional'
+  | 'setupFix'
+  | 'flowStep1Title'
+  | 'flowStep1Desc'
+  | 'flowStep2Title'
+  | 'flowStep2Desc'
+  | 'flowStep3Title'
+  | 'flowStep3Desc';
 
 export type TranslationCopy = Record<TranslationKey, string>;
 
@@ -545,7 +561,23 @@ export const translations: Record<Language, TranslationCopy> = {
     dailyCostLimit: 'Daily API cost limit (USD, 0 = off)',
     quotaConfirm: 'Daily API cost limit reached. Continue anyway?',
     pricingTable: 'API costs & quota',
-    pricingTableHelp: 'Prices used to estimate spend per call. Update them when OpenAI pricing changes. The daily limit asks for confirmation before scans/analyses once exceeded.'
+    pricingTableHelp: 'Prices used to estimate spend per call. Update them when OpenAI pricing changes. The daily limit asks for confirmation before scans/analyses once exceeded.',
+    navDaily: 'Daily',
+    navAdvanced: 'Advanced',
+    setupChecklist: 'Start here',
+    setupChecklistHelp: 'Finish these once. After that, the daily flow below is all you need.',
+    setupOpenAiKey: 'Add your OpenAI API key',
+    setupThreads: 'Log in to Threads',
+    setupBackground: 'Add a background clip',
+    setupKeywords: 'Enable scan keywords',
+    setupOptional: 'Optional',
+    setupFix: 'Set up',
+    flowStep1Title: 'Find a viral post',
+    flowStep1Desc: 'Paste a Threads link you found, or scan your keywords for opportunities.',
+    flowStep2Title: 'Review & render',
+    flowStep2Desc: 'Tweak the hook and script in the brief, then hit render. One video takes a few minutes.',
+    flowStep3Title: 'Post & log results',
+    flowStep3Desc: 'Upload manually to TikTok, then record views and orders in Results so the AI learns.'
   },
   vi: {
     opportunityInbox: 'Cơ hội hôm nay',
@@ -817,6 +849,22 @@ export const translations: Record<Language, TranslationCopy> = {
     dailyCostLimit: 'Ngưỡng chi phí API/ngày (USD, 0 = tắt)',
     quotaConfirm: 'Đã chạm ngưỡng chi phí API hôm nay. Vẫn tiếp tục?',
     pricingTable: 'Chi phí API & hạn mức',
-    pricingTableHelp: 'Bảng giá dùng để ước tính chi phí mỗi lần gọi. Cập nhật khi OpenAI đổi giá. Vượt ngưỡng ngày thì scan/analyze sẽ hỏi xác nhận trước khi chạy.'
+    pricingTableHelp: 'Bảng giá dùng để ước tính chi phí mỗi lần gọi. Cập nhật khi OpenAI đổi giá. Vượt ngưỡng ngày thì scan/analyze sẽ hỏi xác nhận trước khi chạy.',
+    navDaily: 'Hàng ngày',
+    navAdvanced: 'Nâng cao',
+    setupChecklist: 'Bắt đầu từ đây',
+    setupChecklistHelp: 'Hoàn thành các mục này một lần. Sau đó chỉ cần dùng luồng làm việc bên dưới mỗi ngày.',
+    setupOpenAiKey: 'Thêm OpenAI API key',
+    setupThreads: 'Đăng nhập Threads',
+    setupBackground: 'Thêm clip nền retention',
+    setupKeywords: 'Bật từ khóa để quét',
+    setupOptional: 'Tùy chọn',
+    setupFix: 'Thiết lập',
+    flowStep1Title: 'Tìm bài viral',
+    flowStep1Desc: 'Paste link Threads bạn thấy hay, hoặc bấm quét từ khóa để AI tìm cơ hội.',
+    flowStep2Title: 'Review & render',
+    flowStep2Desc: 'Chỉnh hook và script trong brief rồi bấm render. Mỗi video mất vài phút.',
+    flowStep3Title: 'Đăng & ghi kết quả',
+    flowStep3Desc: 'Đăng thủ công lên TikTok, rồi ghi view và đơn vào Results để AI học dần.'
   }
 };
