@@ -16,7 +16,7 @@ export function filterUsefulReplies(replies: ThreadsReply[]) {
     if (!isUsefulReplyContent(content)) return [];
     seen.add(reply.id);
     return [{ ...reply, content }];
-  });
+  }).sort((left, right) => right.likes - left.likes);
 }
 
 export function sanitizeThreadsReplyContent(content: string) {

@@ -179,9 +179,7 @@ async function createThreadsContext(headless: boolean): Promise<BrowserContext> 
   const config = getConfig();
   return chromium.launchPersistentContext(config.threadsProfileDir, {
     headless,
-    viewport: { width: headless ? 1440 : 1280, height: headless ? 1100 : 900 },
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
+    viewport: { width: headless ? 1440 : 1280, height: headless ? 1100 : 900 }
   });
 }
 
@@ -266,9 +264,10 @@ async function attachTopReplies(page: Page, posts: ThreadsPost[]) {
 async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsReply[]> {
   await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login first.');
-  await page.waitForTimeout(1400);
-  await page.mouse.wheel(0, 700);
-  await page.waitForTimeout(700);
+  // Threads hydrates the permalink and its ranked replies asynchronously.
+  // Reading or scrolling too early can switch us onto a partially loaded
+  // nested reply branch instead of the visible Top replies.
+  await page.waitForTimeout(5000);
   const collectVisibleReplies = () => page.evaluate((rootUrl) => {
     const rootId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0] ?? '';
     const anchors = Array.from(document.querySelectorAll('a'))
@@ -280,26 +279,26 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
     for (const anchor of anchors) {
       const match = anchor.href.match(/\/@([A-Za-z0-9._]+)\/post\/([A-Za-z0-9_-]+)/);
       if (!match || match[2] === rootId || seen.has(match[2])) continue;
-      let container = anchor.closest('[data-pressable-container="true"]') as HTMLElement | null;
-      if (!container) {
-        let current: HTMLElement | null = anchor;
-        for (let depth = 0; current && depth < 12; depth += 1) {
-          const text = current.innerText?.trim() ?? '';
-          if (text.length >= 20 && text.length <= 1800 && current.querySelector('svg[aria-label="Like"]')) {
-            container = current;
-            break;
-          }
-          current = current.parentElement;
+      // `data-pressable-container` is not a stable card boundary on Threads:
+      // it may point to an action wrapper or the entire conversation. Walk up
+      // from the reply permalink and take the smallest ancestor that contains
+      // the reply text plus its own Like control.
+      let container: HTMLElement | null = null;
+      let current: HTMLElement | null = anchor;
+      for (let depth = 0; current && depth < 14; depth += 1) {
+        const text = current.innerText?.trim() ?? '';
+        if (text.length >= 20 && text.length <= 2500 && current.querySelector('svg[aria-label="Like"]')) {
+          container = current;
+          break;
         }
+        current = current.parentElement;
       }
       if (!container) continue;
       // A quoted/embedded Threads card has its own permalink inside the direct
       // reply. Its anchor must not be promoted to a top-level reply.
-      if (isNestedQuotedPost(anchor, container, match[2], rootId)) continue;
-
       // Keep only the direct reply's text. Otherwise an outer reply containing
       // a quote card inherits all text/metrics from the embedded post.
-      const lines = directReplyText(container, match[2])
+      const lines = directReplyText(container)
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean);
@@ -319,10 +318,11 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
         .replace(/^\s*[·•.]\s*(?:author|tác\s+giả)\s*[:·•.\-–—]?\s*/iu, '')
         .trim();
       if (!isUsefulContent(content)) continue;
-      const likes = interactionMetric(container, ['like', 'thich']) ?? 0;
-      const replyCount = interactionMetric(container, ['reply', 'comment', 'tra loi', 'binh luan']);
-      const reposts = interactionMetric(container, ['repost', 'dang lai']);
-      const shares = interactionMetric(container, ['share', 'send', 'chia se', 'gui']);
+      const lineMetrics = lines.slice(contentEnd).filter(isMetricLine).map(compactToNumber);
+      const likes = Math.max(interactionMetric(container, ['like', 'thich']) ?? 0, lineMetrics[0] ?? 0);
+      const replyCount = maxMetric(interactionMetric(container, ['reply', 'comment', 'tra loi', 'binh luan']), lineMetrics[1]);
+      const reposts = maxMetric(interactionMetric(container, ['repost', 'dang lai']), lineMetrics[2]);
+      const shares = maxMetric(interactionMetric(container, ['share', 'send', 'chia se', 'gui']), lineMetrics[3]);
       const authorAvatarUrl = findAuthorAvatar(container, match[1]);
       seen.add(match[2]);
       replies.push({
@@ -351,39 +351,14 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
       return image?.currentSrc || image?.src || undefined;
     }
 
-    function isNestedQuotedPost(
-      anchor: HTMLAnchorElement,
-      container: HTMLElement,
-      candidateId: string,
-      rootPostId: string
-    ) {
-      let ancestor = container.parentElement;
-      for (let depth = 0; ancestor && depth < 8; depth += 1) {
-        if (ancestor.matches('[data-pressable-container="true"]')) {
-          const ancestorPostIds = Array.from(ancestor.querySelectorAll('a[href*="/post/"]'))
-            .map((link) => (link as HTMLAnchorElement).href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
-            .filter((id): id is string => Boolean(id));
-          if (ancestorPostIds.some((id) => id !== candidateId && id !== rootPostId)) {
-            return true;
-          }
-        }
-        ancestor = ancestor.parentElement;
-      }
-      return false;
+    function directReplyText(container: HTMLElement) {
+      return container.innerText ?? container.textContent ?? '';
     }
 
-    function directReplyText(container: HTMLElement, candidateId: string) {
-      const clone = container.cloneNode(true) as HTMLElement;
-      const nestedCards = Array.from(
-        clone.querySelectorAll('[data-pressable-container="true"]')
-      ) as HTMLElement[];
-      for (const nested of nestedCards) {
-        const nestedPostIds = Array.from(nested.querySelectorAll('a[href*="/post/"]'))
-          .map((link) => (link as HTMLAnchorElement).href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
-          .filter((id): id is string => Boolean(id));
-        if (nestedPostIds.length && !nestedPostIds.includes(candidateId)) nested.remove();
-      }
-      return clone.innerText ?? clone.textContent ?? '';
+    function maxMetric(left?: number, right?: number) {
+      if (left === undefined) return right;
+      if (right === undefined) return left;
+      return Math.max(left, right);
     }
 
     function interactionMetric(container: HTMLElement, labels: string[]) {

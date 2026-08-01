@@ -56,28 +56,113 @@ export function listGeneratedVideos(): GeneratedVideoItem[] {
       const stats = fs.statSync(filePath);
       const relativeDir = path.dirname(path.relative(exportsDir, filePath));
       const label = relativeDir.split(path.sep).filter(Boolean).join(' · ') || path.basename(filePath);
-      const previewPath = path.join(path.dirname(filePath), 'thumbnails', 'thumb_002.jpg');
+      const info = readExportInfo(filePath);
+      const postId = info.postId ?? relativeDir.split(path.sep).filter(Boolean)[0] ?? '';
+      const previewPath = isLegacyFinalVideo(filePath)
+        ? path.join(path.dirname(filePath), 'thumbnails', 'thumb_002.jpg')
+        : path.join(path.dirname(filePath), '_work', 'thumbnails', 'thumb_002.jpg');
+      const review = readVideoReview(filePath);
+      const publish = readVideoPublish(filePath);
       return {
         id: crypto.createHash('sha1').update(filePath).digest('hex'),
+        postId,
         label,
         filePath,
         createdAt: stats.mtime.toISOString(),
         sizeBytes: stats.size,
+        reviewStatus: review.approvedAt ? 'approved' as const : 'pending' as const,
+        approvedAt: review.approvedAt,
+        publishStatus: publish.status ?? 'not_published',
+        publishedUrl: publish.publishedUrl,
+        publishCaption: publish.caption ?? readDefaultCaption(filePath),
+        publishError: publish.error,
         thumbnailDataUrl: fs.existsSync(previewPath) ? `data:image/jpeg;base64,${fs.readFileSync(previewPath).toString('base64')}` : undefined
       };
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
+export function setGeneratedVideoPublishState(filePath: string, state: { status: GeneratedVideoItem['publishStatus']; caption?: string; publishedUrl?: string; error?: string }) {
+  const resolved = assertGeneratedVideoPath(filePath);
+  const metadataPath = publishPath(resolved);
+  fs.mkdirSync(path.dirname(metadataPath), { recursive: true });
+  fs.writeFileSync(metadataPath, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+}
+
 export function deleteGeneratedVideo(filePath: string) {
-  fs.rmSync(assertGeneratedVideoPath(filePath), { force: true });
+  const resolved = assertGeneratedVideoPath(filePath);
+  fs.rmSync(resolved, { force: true });
+  fs.rmSync(reviewPath(resolved), { force: true });
+}
+
+export function setGeneratedVideoApproved(filePath: string, approved: boolean) {
+  const resolved = assertGeneratedVideoPath(filePath);
+  if (approved) fs.writeFileSync(reviewPath(resolved), JSON.stringify({ approvedAt: new Date().toISOString() }, null, 2), 'utf8');
+  else fs.rmSync(reviewPath(resolved), { force: true });
+  return listGeneratedVideos();
+}
+
+function reviewPath(filePath: string) {
+  return isLegacyFinalVideo(filePath)
+    ? path.join(path.dirname(filePath), 'review-status.json')
+    : path.join(path.dirname(filePath), '_work', `${path.basename(filePath, path.extname(filePath))}.review.json`);
+}
+
+function publishPath(filePath: string) {
+  return isLegacyFinalVideo(filePath)
+    ? path.join(path.dirname(filePath), 'publish-status.json')
+    : path.join(path.dirname(filePath), '_work', `${path.basename(filePath, path.extname(filePath))}.publish.json`);
+}
+
+function readVideoPublish(filePath: string): { status?: GeneratedVideoItem['publishStatus']; caption?: string; publishedUrl?: string; error?: string } {
+  try {
+    return JSON.parse(fs.readFileSync(publishPath(filePath), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function readDefaultCaption(filePath: string) {
+  try {
+    const metadataPath = isLegacyFinalVideo(filePath)
+      ? path.join(path.dirname(filePath), 'tiktok-metadata.json')
+      : path.join(path.dirname(filePath), '_work', 'tiktok-metadata.json');
+    const value = JSON.parse(fs.readFileSync(metadataPath, 'utf8')) as { caption_variants?: unknown; hashtags?: unknown };
+    const caption = Array.isArray(value.caption_variants) && typeof value.caption_variants[0] === 'string' ? value.caption_variants[0].trim() : '';
+    const hashtags = Array.isArray(value.hashtags) ? value.hashtags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.startsWith('#') ? tag : `#${tag}`).join(' ') : '';
+    return [caption, hashtags].filter(Boolean).join('\n');
+  } catch {
+    return '';
+  }
+}
+
+function isLegacyFinalVideo(filePath: string) {
+  return path.basename(filePath) === 'affiliate-video-final.mp4';
+}
+
+function readExportInfo(filePath: string): { postId?: string } {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(path.dirname(filePath), '_work', 'export-info.json'), 'utf8')) as { postId?: unknown };
+    return typeof value.postId === 'string' ? { postId: value.postId } : {};
+  } catch {
+    return {};
+  }
+}
+
+function readVideoReview(filePath: string): { approvedAt?: string } {
+  try {
+    const value = JSON.parse(fs.readFileSync(reviewPath(filePath), 'utf8')) as { approvedAt?: unknown };
+    return typeof value.approvedAt === 'string' ? { approvedAt: value.approvedAt } : {};
+  } catch {
+    return {};
+  }
 }
 
 export function assertGeneratedVideoPath(filePath: string) {
   const exportsDir = path.resolve(process.cwd(), 'data', 'video-exports');
   const resolved = path.resolve(filePath);
   const relative = path.relative(exportsDir, resolved);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.basename(resolved) !== 'affiliate-video-final.mp4') {
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.extname(resolved).toLowerCase() !== '.mp4' || relative.split(path.sep).includes('_work')) {
     throw new Error('Video path is outside the generated video library.');
   }
   return resolved;
@@ -144,8 +229,11 @@ function findFinalVideos(root: string) {
     if (!current) continue;
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) pending.push(fullPath);
-      else if (entry.isFile() && entry.name === 'affiliate-video-final.mp4') files.push(fullPath);
+      if (entry.isDirectory() && entry.name !== '_work') pending.push(fullPath);
+      else if (entry.isFile() && (
+        entry.name === 'affiliate-video-final.mp4'
+        || (/^\d{8}(?:-\d+)?$/.test(path.basename(current)) && entry.name.startsWith(`${path.basename(current)}`) && entry.name.toLowerCase().endsWith('.mp4'))
+      )) files.push(fullPath);
     }
   }
   return files;

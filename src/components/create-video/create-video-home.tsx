@@ -1,10 +1,10 @@
 'use client';
 
-import { ArrowRight, CheckCircle2, Circle, Clock3, ExternalLink, Link2, Settings2, Video } from 'lucide-react';
+import { CheckCircle2, Circle, Link2, Settings2, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { TranslationCopy } from '@/lib/i18n';
-import type { CreateFromLinkProgress, ThreadsPost } from '@/lib/types';
+import type { CreateFromLinkProgress } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export function CreateVideoHome({
@@ -15,13 +15,10 @@ export function CreateVideoHome({
   isCreatingFromLink,
   language,
   openAiReady,
-  posts,
   threadsReady,
   onCreateFromLink,
   onCreateLinkUrl,
   onNavigateSettings,
-  onOpenDraft,
-  onOpenLink
 }: {
   copy: TranslationCopy;
   createLinkProgress: CreateFromLinkProgress | null;
@@ -30,19 +27,12 @@ export function CreateVideoHome({
   isCreatingFromLink: boolean;
   language: 'en' | 'vi';
   openAiReady: boolean;
-  posts: ThreadsPost[];
   threadsReady: boolean;
   onCreateFromLink: () => void;
   onCreateLinkUrl: (url: string) => void;
   onNavigateSettings: () => void;
-  onOpenDraft: (post: ThreadsPost) => void;
-  onOpenLink: (post: ThreadsPost) => void;
 }) {
   const vi = language === 'vi';
-  const recentPosts = [...posts]
-    .filter((post) => post.source === 'manual')
-    .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
-    .slice(0, 5);
   const setupReady = openAiReady && threadsReady;
 
   return (
@@ -124,56 +114,6 @@ export function CreateVideoHome({
         </div>
       </section>
 
-      <section>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Clock3 className="size-4 text-muted" />
-            <h2 className="text-sm font-semibold text-text">{vi ? 'Bài đã nhập gần đây' : 'Recent imports'}</h2>
-          </div>
-          {!setupReady ? (
-            <Button className="h-8 px-3 text-xs" icon={<Settings2 className="size-3.5" />} onClick={onNavigateSettings}>
-              {vi ? 'Mở cài đặt' : 'Open settings'}
-            </Button>
-          ) : null}
-        </div>
-
-        {recentPosts.length ? (
-          <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
-            {recentPosts.map((post) => (
-              <article key={post.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 text-xs text-muted">
-                    <span className="truncate font-medium text-slate-300">@{post.authorHandle || post.author}</span>
-                    <span>{formatRecentDate(post.fetchedAt, language)}</span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-200">{post.content}</p>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    aria-label={copy.openLink}
-                    title={copy.openLink}
-                    className="h-9 px-2.5"
-                    icon={<ExternalLink className="size-4" />}
-                    onClick={() => onOpenLink(post)}
-                  />
-                  <Button
-                    variant="primary"
-                    className="h-9"
-                    icon={<ArrowRight className="size-4" />}
-                    onClick={() => onOpenDraft(post)}
-                  >
-                    {vi ? 'Mở video' : 'Open video'}
-                  </Button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-border px-5 py-10 text-center text-sm text-muted">
-            {vi ? 'Chưa có bài nào. Dán link ở trên để bắt đầu.' : 'No imports yet. Paste a link above to begin.'}
-          </div>
-        )}
-      </section>
     </div>
   );
 }
@@ -195,15 +135,4 @@ function ModeItem({ done, label, onClick, value }: { done: boolean; label: strin
   ) : (
     <div className="flex items-center gap-3 bg-panelSoft px-5 py-3">{content}</div>
   );
-}
-
-function formatRecentDate(value: string, language: 'en' | 'vi') {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat(language === 'vi' ? 'vi-VN' : 'en-US', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(date);
 }

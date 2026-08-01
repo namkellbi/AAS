@@ -6,5 +6,5 @@ export const defaultFeatureVisibility: FeatureVisibility = {
   opportunityDiscovery: false,
   affiliateWorkspace: false,
   assetLibrary: false,
-  resultsTracking: false
+  resultsTracking: true
 };

@@ -96,10 +96,12 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   if (karaokeEnabled && !openAiApiKey) throw new Error('OpenAI API key is required for Whisper karaoke timestamps. Add the key or turn off Karaoke caption.');
   if (karaokeEnabled) await ensureSubtitlesFilterAvailable();
 
-  const exportDir = path.resolve(process.cwd(), 'data', 'video-exports', safeFileName(request.post.id));
-  const thumbDir = path.join(exportDir, 'thumbnails');
+  const { exportDir, exportName } = allocateExportDirectory();
+  const workDir = path.join(exportDir, '_work');
+  const thumbDir = path.join(workDir, 'thumbnails');
   fs.mkdirSync(thumbDir, { recursive: true });
-  const outputPath = path.join(exportDir, 'affiliate-video-final.mp4');
+  fs.writeFileSync(path.join(workDir, 'export-info.json'), JSON.stringify({ postId: request.post.id, createdAt: new Date().toISOString() }, null, 2), 'utf8');
+  const outputPath = path.join(exportDir, `${exportName}.mp4`);
   const voice = getDefaultVoice();
   const speed = getDefaultSpeed();
   const hookText = useOriginalPostReadOnly ? '' : request.hookText?.trim() || request.analysis.hooks[0]?.trim() || '';
@@ -141,14 +143,14 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   const spokenText = (source: string) => speechBySource.get(source) ?? normalizeVietnameseForSpeech(source);
 
   onProgress({ percent: 16, message: `Đang tạo voiceover · ${voice} · tốc độ ${speed.toFixed(2)}x...` });
-  const hookScene = hookText ? await createTextScene(exportDir, 'hook', hookText, apiKey, voice, speed, 2, ttsFor('hook'), karaokeEnabled ? 'native-hook' : 'card', spokenText(hookText)) : null;
-  const postScene = await createSpokenScene(exportDir, 'post', postText, request.post, undefined, apiKey, voice, speed, ttsFor('post'), spokenText(postText));
+  const hookScene = hookText ? await createTextScene(workDir, 'hook', hookText, apiKey, voice, speed, 2, ttsFor('hook'), karaokeEnabled ? 'native-hook' : 'card', spokenText(hookText)) : null;
+  const postScene = await createSpokenScene(workDir, 'post', postText, request.post, undefined, apiKey, voice, speed, ttsFor('post'), spokenText(postText));
   const replyScenes = await Promise.all(
-    replies.map((reply, index) => createSpokenScene(exportDir, `reply-${index + 1}`, reply.content, request.post, reply, apiKey, voice, speed, ttsFor('reply'), spokenText(reply.content)))
+    replies.map((reply, index) => createSpokenScene(workDir, `reply-${index + 1}`, reply.content, request.post, reply, apiKey, voice, speed, ttsFor('reply'), spokenText(reply.content)))
   );
-  const transitionScene = transitionLine ? await createTextScene(exportDir, 'transition', transitionLine, apiKey, voice, speed, 2, ttsFor('transition'), karaokeEnabled ? 'none' : 'card', spokenText(transitionLine)) : null;
-  const solutionScene = solutionText ? await createTextScene(exportDir, 'solution', solutionText, apiKey, voice, speed, 4, ttsFor('solution'), karaokeEnabled ? 'none' : 'card', spokenText(solutionText)) : null;
-  const outroScene = ctaText ? await createTextScene(exportDir, 'outro', ctaText, apiKey, voice, speed, 3, ttsFor('cta'), karaokeEnabled ? 'none' : 'card', spokenText(ctaText)) : null;
+  const transitionScene = transitionLine ? await createTextScene(workDir, 'transition', transitionLine, apiKey, voice, speed, 2, ttsFor('transition'), karaokeEnabled ? 'none' : 'card', spokenText(transitionLine)) : null;
+  const solutionScene = solutionText ? await createTextScene(workDir, 'solution', solutionText, apiKey, voice, speed, 4, ttsFor('solution'), karaokeEnabled ? 'none' : 'card', spokenText(solutionText)) : null;
+  const outroScene = ctaText ? await createTextScene(workDir, 'outro', ctaText, apiKey, voice, speed, 3, ttsFor('cta'), karaokeEnabled ? 'none' : 'card', spokenText(ctaText)) : null;
 
   const scenes = [hookScene, postScene, ...replyScenes, transitionScene, solutionScene].filter((scene): scene is Scene => Boolean(scene));
 
@@ -172,9 +174,9 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   const segmentPaths = scenes.map((scene) => scene.outputPath);
   if (request.demoPath && fs.existsSync(request.demoPath)) {
     const productDuration = await probeDuration(request.demoPath);
-    const productOverlay = path.join(exportDir, 'product-overlay.png');
+    const productOverlay = path.join(workDir, 'product-overlay.png');
     await renderTextCard(productOverlay, request.analysis.affiliateProducts[0] || 'Sản phẩm phù hợp', ctaText, 'product');
-    const productOutput = path.join(exportDir, 'segment-product.mp4');
+    const productOutput = path.join(workDir, 'segment-product.mp4');
     await renderSilentOverlayScene(request.demoPath, productOverlay, productOutput, productDuration + silenceSecs);
     segmentPaths.push(productOutput);
   }
@@ -189,7 +191,7 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   await mixBackgroundMusic(outputPath);
 
   onProgress({ percent: 90, message: 'Đang tạo metadata, checklist và thumbnail...' });
-  await writeMetadata(exportDir, request.analysis, ctaText, request.product, { provider: ttsProvider, voice, speed });
+  await writeMetadata(workDir, request.analysis, ctaText, request.product, { provider: ttsProvider, voice, speed }, path.basename(outputPath));
   await extractThumbnails(outputPath, thumbDir);
 
   // F1 — variants: only hook + CTA change; every middle segment is reused byte-for-byte, so a
@@ -199,7 +201,7 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   const middleSegments = segmentPaths.filter((segment) => (!outroScene || segment !== outroScene.outputPath) && (!hookScene || segment !== hookScene.outputPath));
   for (const [index, variant] of variants.entries()) {
     onProgress({ percent: 92 + index * 3, message: `Đang render variant ${index + 1}/${variants.length}...` });
-    const variantDir = path.join(exportDir, `variant-${index + 1}`);
+    const variantDir = path.join(workDir, `variant-${index + 1}`);
     const variantThumbDir = path.join(variantDir, 'thumbnails');
     fs.mkdirSync(variantThumbDir, { recursive: true });
     const variantHookText = variant.hookText.trim() || hookText;
@@ -220,10 +222,10 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     if (variantHook) await renderOverlayScene(request.backgroundPath, variantHook, silenceSecs);
     await renderOverlayScene(request.backgroundPath, variantOutro, silenceSecs);
 
-    const variantOutput = path.join(variantDir, 'affiliate-video-final.mp4');
+    const variantOutput = path.join(exportDir, `${exportName}-variant-${index + 1}.mp4`);
     await concatVideoSegments([...(variantHook ? [variantHook.outputPath] : []), ...middleSegments, variantOutro.outputPath], variantOutput);
     await mixBackgroundMusic(variantOutput);
-    await writeMetadata(variantDir, request.analysis, variantCtaText, request.product, { provider: ttsProvider, voice, speed });
+    await writeMetadata(variantDir, request.analysis, variantCtaText, request.product, { provider: ttsProvider, voice, speed }, path.basename(variantOutput));
     fs.writeFileSync(
       path.join(variantDir, 'variant-info.json'),
       JSON.stringify({ label: variant.label.trim() || `variant-${index + 1}`, hook: variantHookText, cta: variantCtaText }, null, 2),
@@ -480,7 +482,7 @@ async function mixBackgroundMusic(videoPath: string) {
   }
 }
 
-async function writeMetadata(exportDir: string, analysis: AIAnalysis, ctaText: string, product: Product | undefined, tts: { provider: TtsProvider; voice: TtsVoice; speed: number }) {
+async function writeMetadata(exportDir: string, analysis: AIAnalysis, ctaText: string, product: Product | undefined, tts: { provider: TtsProvider; voice: TtsVoice; speed: number }, finalFileName: string) {
   const useOriginalPostReadOnly = !getCreativeAiEnabled();
   const metadata = {
     caption_variants: useOriginalPostReadOnly ? [] : analysis.videoScript.captionVariants.length ? analysis.videoScript.captionVariants : [analysis.tiktokCaption].filter(Boolean),
@@ -506,7 +508,7 @@ async function writeMetadata(exportDir: string, analysis: AIAnalysis, ctaText: s
   };
   fs.writeFileSync(path.join(exportDir, 'tiktok-metadata.json'), JSON.stringify(metadata, null, 2), 'utf8');
   const checklist = [
-    'Video đã render: affiliate-video-final.mp4',
+    `Video đã render: ${finalFileName}`,
     'Metadata sẵn sàng: tiktok-metadata.json',
     '',
     '[ ] 1. Mở TikTok và chọn video',
@@ -520,6 +522,22 @@ async function writeMetadata(exportDir: string, analysis: AIAnalysis, ctaText: s
   if (ctaText) checklist.push(`[ ] 6. Kiểm tra CTA: ${ctaText}`);
   if (product) checklist.push('[ ] 7. Bật nhãn "Nội dung có gắn liên kết tiếp thị" (disclosure affiliate)');
   fs.writeFileSync(path.join(exportDir, 'upload-checklist.txt'), checklist.join('\n'), 'utf8');
+}
+
+function allocateExportDirectory() {
+  const root = path.resolve(process.cwd(), 'data', 'video-exports');
+  fs.mkdirSync(root, { recursive: true });
+  const now = new Date();
+  const base = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${now.getFullYear()}`;
+  let index = 0;
+  let exportName = base;
+  while (fs.existsSync(path.join(root, exportName))) {
+    index += 1;
+    exportName = `${base}-${index}`;
+  }
+  const exportDir = path.join(root, exportName);
+  fs.mkdirSync(exportDir, { recursive: false });
+  return { exportDir, exportName };
 }
 
 async function extractThumbnails(videoPath: string, outputDir: string) {

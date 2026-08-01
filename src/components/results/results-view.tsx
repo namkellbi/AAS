@@ -1,48 +1,14 @@
 'use client';
 
-import { CheckCircle2, ExternalLink, Pencil, Plus, Trash2, TrendingUp, X, XCircle } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Bookmark, Clock3, ExternalLink, Eye, Heart, LoaderCircle, MessageCircle, Pencil, RefreshCcw, Share2, Trash2, TrendingUp, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { TranslationCopy } from '@/lib/i18n';
 import type { AIAnalysis, Product, ReadinessThresholds, ThreadsPost, UploadLogEntry, UsageSummary } from '@/lib/types';
 import { cn, compactNumber } from '@/lib/utils';
 
-const emptyEntry = (postId = ''): UploadLogEntry => ({
-  id: '',
-  postId,
-  tiktokUrl: '',
-  productName: '',
-  hook: '',
-  contentFormat: '',
-  uploadedAt: new Date().toISOString(),
-  views: 0,
-  clicks: 0,
-  orders: 0,
-  revenue: 0,
-  commission: 0,
-  status: 'published',
-  note: '',
-  contentGoal: 'affiliate',
-  followersGained: 0,
-  comments: 0,
-  saves: 0,
-  shares: 0,
-  variantLabel: ''
-});
-
-export function ResultsView({
-  analyses,
-  copy,
-  logs,
-  posts,
-  products,
-  thresholds,
-  usage,
-  onDelete,
-  onSave,
-  onSaveThresholds
-}: {
+export function ResultsView({ logs, posts, onDelete, onSave, onSync }: {
   analyses: AIAnalysis[];
   copy: TranslationCopy;
   logs: UploadLogEntry[];
@@ -52,254 +18,178 @@ export function ResultsView({
   usage: UsageSummary | null;
   onDelete: (id: string) => Promise<void>;
   onSave: (entry: UploadLogEntry) => Promise<void>;
+  onSync: () => Promise<void>;
   onSaveThresholds: (thresholds: Partial<ReadinessThresholds>) => void;
 }) {
-  const [draft, setDraft] = useState<UploadLogEntry>(() => emptyEntry(posts[0]?.id));
-  const [editing, setEditing] = useState(false);
-  const [thresholdDraft, setThresholdDraft] = useState<ReadinessThresholds>(thresholds);
-  useEffect(() => {
-    if (!draft.postId && posts[0]) setDraft((current) => ({ ...current, postId: posts[0].id }));
-  }, [draft.postId, posts]);
-  useEffect(() => {
-    setThresholdDraft(thresholds);
-  }, [thresholds]);
-
-  const readiness = useMemo(() => {
-    const recent = [...logs].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 10);
-    const recentViews = recent.reduce((sum, item) => sum + item.views, 0);
-    const avgViews = recent.length ? Math.round(recentViews / recent.length) : 0;
-    const engagementActions = recent.reduce((sum, item) => sum + item.comments + item.saves + item.shares, 0);
-    const engagementRatePct = recentViews ? (engagementActions / recentViews) * 100 : 0;
-    const followersTotal = logs.reduce((sum, item) => sum + item.followersGained, 0);
-    const streak = postingStreak(logs);
-    const engagementCount = recent.filter((item) => item.contentGoal === 'engagement').length;
-    return { avgViews, engagementRatePct, followersTotal, streak, engagementCount, recentCount: recent.length };
-  }, [logs]);
-  const readinessChecks = [
-    { label: copy.avgRecentViews, value: compactNumber(readiness.avgViews), pass: readiness.avgViews >= thresholds.avgViews, target: compactNumber(thresholds.avgViews) },
-    { label: copy.engagementRate, value: `${readiness.engagementRatePct.toFixed(1)}%`, pass: readiness.engagementRatePct >= thresholds.engagementRatePct, target: `${thresholds.engagementRatePct}%` },
-    { label: copy.postingStreak, value: String(readiness.streak), pass: readiness.streak >= thresholds.streakDays, target: String(thresholds.streakDays) },
-    { label: copy.followersGained, value: compactNumber(readiness.followersTotal), pass: readiness.followersTotal >= thresholds.followersGained, target: compactNumber(thresholds.followersGained) }
-  ];
-  const readyForAffiliate = readinessChecks.every((check) => check.pass);
-
-  const totals = useMemo(() => logs.reduce((sum, item) => ({
-    views: sum.views + item.views,
-    clicks: sum.clicks + item.clicks,
-    orders: sum.orders + item.orders,
-    commission: sum.commission + item.commission
-  }), { views: 0, clicks: 0, orders: 0, commission: 0 }), [logs]);
-  const clickRate = totals.views ? (totals.clicks / totals.views) * 100 : 0;
-  const conversionRate = totals.clicks ? (totals.orders / totals.clicks) * 100 : 0;
-  const winners = [...logs].filter((item) => item.orders > 0 || item.commission > 0).sort((a, b) => b.commission - a.commission || b.orders - a.orders).slice(0, 3);
-  const publishedCount = logs.filter((item) => item.status !== 'stopped').length;
-  const commissionPerVideo = publishedCount ? totals.commission / publishedCount : 0;
-  const makeNowAnalyses = analyses.filter((item) => item.verdict === 'make_now');
-  const postedPostIds = new Set(logs.map((item) => item.postId));
-  const makeNowPostedRate = makeNowAnalyses.length ? (makeNowAnalyses.filter((item) => postedPostIds.has(item.postId)).length / makeNowAnalyses.length) * 100 : 0;
-
-  async function saveDraft() {
-    if (!draft.postId) return;
-    await onSave({ ...draft, id: draft.id || crypto.randomUUID(), uploadedAt: draft.uploadedAt || new Date().toISOString() });
-    setDraft(emptyEntry(posts[0]?.id));
-    setEditing(false);
-  }
+  const [editing, setEditing] = useState<UploadLogEntry | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
+  const ordered = useMemo(() => [...logs].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)), [logs]);
+  const totals = useMemo(() => ordered.reduce((result, log) => ({
+    views: result.views + metric(log.views),
+    engagement: result.engagement + metric(log.likes) + metric(log.comments) + metric(log.saves) + metric(log.shares),
+    followers: result.followers + metric(log.followersGained)
+  }), { views: 0, engagement: 0, followers: 0 }), [ordered]);
+  const averageViews = ordered.length ? Math.round(totals.views / ordered.length) : 0;
+  const engagementRate = totals.views ? (totals.engagement / totals.views) * 100 : 0;
+  const postingSlots = useMemo(() => buildPostingSlots(ordered), [ordered]);
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold text-text">{copy.results}</h2>
-        <p className="mt-1 text-sm text-muted">{copy.resultsHelp}</p>
-      </div>
-
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <ResultMetric label={copy.totalViews} value={compactNumber(totals.views)} />
-        <ResultMetric label={copy.clickRate} value={`${clickRate.toFixed(1)}%`} />
-        <ResultMetric label={copy.orderConversion} value={`${conversionRate.toFixed(1)}%`} />
-        <ResultMetric label={copy.totalCommission} value={currency(totals.commission)} accent />
-      </section>
-
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <ResultMetric label={copy.costPerDraft} value={usage ? `$${usage.costPerDraft.toFixed(2)}` : '—'} />
-        <ResultMetric label={copy.commissionPerVideo} value={currency(commissionPerVideo)} />
-        <ResultMetric label={copy.makeNowPostedRate} value={`${makeNowPostedRate.toFixed(0)}%`} />
-        <ResultMetric label={copy.todayApiCost} value={usage ? `$${usage.todayUsd.toFixed(2)}` : '—'} />
-      </section>
-
-      <section className="rounded-lg border border-border bg-panel p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-text">{copy.channelReadiness}</h3>
-            <p className="mt-1 text-xs text-muted">{copy.readinessHelp}</p>
-          </div>
-          <span className={cn('inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold', readyForAffiliate ? 'bg-success/15 text-emerald-200' : 'bg-warning/15 text-amber-200')}>
-            {readyForAffiliate ? <CheckCircle2 className="size-3.5" /> : <XCircle className="size-3.5" />}
-            {copy.readyForAffiliate}
-          </span>
+    <div className="mx-auto w-full max-w-6xl space-y-5 pb-10">
+      <section className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-text">Theo dõi video TikTok</h2>
+          <p className="mt-1 text-sm text-muted">Ghi nhận kết quả sau khi đăng để tìm ra khung giờ và kiểu nội dung phù hợp với chính tài khoản này.</p>
         </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {readinessChecks.map((check) => (
-            <div key={check.label} className={cn('rounded-md border p-3', check.pass ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-border bg-panelSoft')}>
-              <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">{check.label}</div>
-              <div className={cn('mt-2 text-xl font-semibold', check.pass ? 'text-emerald-200' : 'text-text')}>{check.value}</div>
-              <div className="mt-1 text-[11px] text-muted">≥ {check.target}</div>
-            </div>
-          ))}
-        </div>
-        {readiness.recentCount ? (
-          <div className="mt-3 text-xs text-muted">{copy.contentMix}: {readiness.engagementCount} {copy.goalEngagement.toLowerCase()} · {readiness.recentCount - readiness.engagementCount} {copy.goalAffiliate.toLowerCase()}</div>
-        ) : null}
-        <div className="mt-4 grid gap-3 border-t border-border pt-4 md:grid-cols-2 xl:grid-cols-5">
-          <NumberInput label={copy.avgRecentViews} value={thresholdDraft.avgViews} onChange={(avgViews) => setThresholdDraft({ ...thresholdDraft, avgViews })} />
-          <NumberInput label={`${copy.engagementRate} (%)`} value={thresholdDraft.engagementRatePct} onChange={(engagementRatePct) => setThresholdDraft({ ...thresholdDraft, engagementRatePct })} />
-          <NumberInput label={copy.postingStreak} value={thresholdDraft.streakDays} onChange={(streakDays) => setThresholdDraft({ ...thresholdDraft, streakDays })} />
-          <NumberInput label={copy.followersGained} value={thresholdDraft.followersGained} onChange={(followersGained) => setThresholdDraft({ ...thresholdDraft, followersGained })} />
-          <div className="flex items-end">
-            <Button onClick={() => onSaveThresholds(thresholdDraft)}>{copy.save}</Button>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border bg-panel p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-text">{editing ? copy.editResult : copy.addResult}</h3>
-            <p className="mt-1 text-xs text-muted">{copy.resultFormHelp}</p>
-          </div>
-          {editing ? <Button className="px-2" icon={<X className="size-4" />} onClick={() => {
-            setDraft(emptyEntry(posts[0]?.id));
-            setEditing(false);
-          }} /> : null}
-        </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={draft.postId} onChange={(event) => setDraft({ ...draft, postId: event.target.value })}>
-            <option value="">{copy.chooseSourcePost}</option>
-            {posts.map((post) => <option key={post.id} value={post.id}>{post.author}: {post.content.slice(0, 44)}</option>)}
-          </select>
-          <Input placeholder="TikTok URL" value={draft.tiktokUrl} onChange={(event) => setDraft({ ...draft, tiktokUrl: event.target.value })} />
-          <select
-            className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text"
-            value={draft.productId ?? ''}
-            onChange={(event) => {
-              const product = products.find((item) => item.id === event.target.value);
-              setDraft({ ...draft, productId: product?.id, productName: product ? product.name : draft.productName });
-            }}
+        <div className="flex items-center gap-2">
+          <div className="rounded-full border border-border bg-panel px-3 py-1.5 text-xs text-muted">{ordered.length}/15 video trước khi đủ dữ liệu gợi ý</div>
+          <Button
+            variant="primary"
+            icon={syncing ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+            disabled={syncing || !ordered.length}
+            onClick={async () => { setSyncing(true); try { await onSync(); } finally { setSyncing(false); } }}
           >
-            <option value="">{copy.chooseProduct}</option>
-            {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-          </select>
-          <Input placeholder={copy.productName} value={draft.productName} onChange={(event) => setDraft({ ...draft, productName: event.target.value })} />
-          <Input placeholder={copy.hookUsed} value={draft.hook} onChange={(event) => setDraft({ ...draft, hook: event.target.value })} />
-          <Input placeholder={copy.formatUsed} value={draft.contentFormat} onChange={(event) => setDraft({ ...draft, contentFormat: event.target.value })} />
-          <NumberInput label={copy.views} value={draft.views} onChange={(views) => setDraft({ ...draft, views })} />
-          <NumberInput label={copy.clicks} value={draft.clicks} onChange={(clicks) => setDraft({ ...draft, clicks })} />
-          <NumberInput label={copy.orders} value={draft.orders} onChange={(orders) => setDraft({ ...draft, orders })} />
-          <NumberInput label={copy.revenue} value={draft.revenue} onChange={(revenue) => setDraft({ ...draft, revenue })} />
-          <NumberInput label={copy.commission} value={draft.commission} onChange={(commission) => setDraft({ ...draft, commission })} />
-          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
-            {copy.contentGoal}
-            <select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={draft.contentGoal} onChange={(event) => setDraft({ ...draft, contentGoal: event.target.value === 'engagement' ? 'engagement' : 'affiliate' })}>
-              <option value="affiliate">{copy.goalAffiliate}</option>
-              <option value="engagement">{copy.goalEngagement}</option>
-            </select>
-          </label>
-          <NumberInput label={copy.commentsMetric} value={draft.comments} onChange={(comments) => setDraft({ ...draft, comments })} />
-          <NumberInput label={copy.savesMetric} value={draft.saves} onChange={(saves) => setDraft({ ...draft, saves })} />
-          <NumberInput label={copy.sharesMetric} value={draft.shares} onChange={(shares) => setDraft({ ...draft, shares })} />
-          <NumberInput label={copy.followersGained} value={draft.followersGained} onChange={(followersGained) => setDraft({ ...draft, followersGained })} />
-          <Input placeholder={copy.variantLabelField} value={draft.variantLabel} onChange={(event) => setDraft({ ...draft, variantLabel: event.target.value })} />
-          <select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as UploadLogEntry['status'] })}>
-            <option value="published">{copy.published}</option>
-            <option value="tracking">{copy.tracking}</option>
-            <option value="winner">{copy.winner}</option>
-            <option value="stopped">{copy.stopped}</option>
-          </select>
-          <Input placeholder={copy.note} value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} />
+            {syncing ? 'Đang đồng bộ...' : 'Đồng bộ TikTok'}
+          </Button>
         </div>
-        <Button className="mt-3" variant="primary" icon={<Plus className="size-4" />} disabled={!draft.postId} onClick={saveDraft}>
-          {editing ? copy.saveChanges : copy.addResult}
-        </Button>
       </section>
 
-      {winners.length ? (
-        <section className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-emerald-200"><TrendingUp className="size-4" />{copy.learnedSignals}</div>
-          <div className="mt-3 grid gap-2 md:grid-cols-3">
-            {winners.map((item) => (
-              <div key={item.id} className="rounded-md border border-emerald-500/15 bg-background/50 p-3">
-                <div className="text-sm font-medium text-text">{item.productName || copy.unknownProduct}</div>
-                <div className="mt-1 line-clamp-2 text-xs text-muted">{item.hook || item.contentFormat || copy.noHookRecorded}</div>
-                <div className="mt-2 text-xs text-emerald-200">{item.orders} {copy.orders.toLowerCase()} · {currency(item.commission)}</div>
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric label="Video đã đăng" value={String(ordered.length)} helper="Được ghi tự động" />
+        <Metric label="Tổng lượt xem" value={compactNumber(totals.views)} helper={`Trung bình ${compactNumber(averageViews)}/video`} />
+        <Metric label="Tỷ lệ tương tác" value={`${engagementRate.toFixed(1)}%`} helper="Like + comment + lưu + chia sẻ" />
+        <Metric label="Follower tăng" value={`+${compactNumber(totals.followers)}`} helper="Từ các video đã theo dõi" accent />
+      </section>
+
+      <section className="rounded-lg border border-border bg-panel p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2"><TrendingUp className="size-4 text-sky-300" /><h3 className="text-sm font-semibold text-text">Khung giờ đang hiệu quả</h3></div>
+            <p className="mt-1 text-xs text-muted">Dùng median views; chỉ kết luận khi mỗi khung giờ có đủ mẫu.</p>
+          </div>
+          <span className="text-xs text-muted">Giờ Việt Nam</span>
+        </div>
+        {postingSlots.length ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            {postingSlots.map((slot, index) => (
+              <div key={slot.hour} className={cn('rounded-md border p-3', index === 0 ? 'border-sky-400/30 bg-sky-400/5' : 'border-border bg-panelSoft')}>
+                <div className="flex justify-between gap-3"><span className="text-sm font-semibold text-text">{hourRange(slot.hour)}</span><span className="text-[11px] text-muted">{slot.samples} video</span></div>
+                <div className="mt-2 text-xl font-semibold text-sky-200">{compactNumber(slot.medianViews)} views</div>
+                <div className="mt-1 text-xs text-muted">Median · tương tác {slot.medianEngagement.toFixed(1)}%</div>
               </div>
             ))}
           </div>
-        </section>
-      ) : null}
+        ) : (
+          <div className="mt-4 rounded-md border border-dashed border-border p-5 text-center">
+            <div className="text-sm font-medium text-text">Chưa đủ dữ liệu để so sánh khung giờ</div>
+            <div className="mt-1 text-xs text-muted">Hãy cập nhật views cho ít nhất 2 video cùng một khung giờ. Gợi ý đáng tin hơn sau khoảng 15–20 video.</div>
+          </div>
+        )}
+      </section>
 
-      <section className="space-y-2">
-        {logs.map((log) => (
-          <article key={log.id} className="rounded-lg border border-border bg-panel p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-text">{log.productName || copy.unknownProduct}</span>
-                  <StatusBadge status={log.status} copy={copy} />
-                </div>
-                <div className="mt-2 text-xs text-muted">{log.uploadedAt.slice(0, 10)} · {compactNumber(log.views)} views · {compactNumber(log.clicks)} clicks · {log.orders} orders · {currency(log.commission)}</div>
-                {log.hook ? <div className="mt-2 line-clamp-2 text-sm text-slate-300">{log.hook}</div> : null}
-              </div>
-              <div className="flex gap-2">
-                {log.tiktokUrl ? <Button className="px-2" icon={<ExternalLink className="size-4" />} onClick={() => window.open(log.tiktokUrl)} /> : null}
-                <Button className="px-2" icon={<Pencil className="size-4" />} onClick={() => {
-                  setDraft(log);
-                  setEditing(true);
-                }} />
-                <Button className="px-2" icon={<Trash2 className="size-4" />} onClick={() => void onDelete(log.id)} />
-              </div>
-            </div>
-          </article>
-        ))}
-        {!logs.length ? <div className="rounded-lg border border-border bg-panel p-6 text-sm text-muted">{copy.noResultsYet}</div> : null}
+      <section className="overflow-hidden rounded-lg border border-border bg-panel">
+        <header className="border-b border-border px-4 py-3"><h3 className="text-sm font-semibold text-text">Lịch sử đã đăng</h3></header>
+        {ordered.length ? (
+          <div className="divide-y divide-border">
+            {ordered.map((log) => (
+              <VideoRow
+                key={log.id}
+                log={log}
+                post={postById.get(log.postId)}
+                onEdit={() => setEditing(log)}
+                onDelete={() => void onDelete(log.id)}
+              />
+            ))}
+          </div>
+        ) : <EmptyState text="Video xuất bản thành công sẽ tự xuất hiện tại đây." />}
+      </section>
+
+      {editing ? <MetricsModal log={editing} onClose={() => setEditing(null)} onSave={async (next) => { await onSave(next); setEditing(null); }} /> : null}
+    </div>
+  );
+}
+
+function VideoRow({ log, post, onDelete, onEdit }: { log: UploadLogEntry; post?: ThreadsPost; onDelete?: () => void; onEdit: () => void }) {
+  return (
+    <article className="flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center">
+      <div className="min-w-0 flex-1">
+        <div className="line-clamp-1 text-sm font-medium text-text">{post?.content || log.hook || 'Video TikTok'}</div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+          <span className="inline-flex items-center gap-1"><Clock3 className="size-3" />{formatPublishedAt(log.uploadedAt)}</span>
+          <span>{formatAge(log.uploadedAt)}</span>
+        </div>
+      </div>
+      <div className="grid grid-cols-5 gap-3 text-center lg:w-[420px]">
+        <SmallMetric icon={<Eye className="size-3.5" />} value={metric(log.views)} />
+        <SmallMetric icon={<Heart className="size-3.5" />} value={metric(log.likes)} />
+        <SmallMetric icon={<MessageCircle className="size-3.5" />} value={metric(log.comments)} />
+        <SmallMetric icon={<Bookmark className="size-3.5" />} value={metric(log.saves)} />
+        <SmallMetric icon={<Share2 className="size-3.5" />} value={metric(log.shares)} />
+      </div>
+      <div className="flex shrink-0 gap-2">
+        {log.tiktokUrl ? <Button className="px-2" icon={<ExternalLink className="size-4" />} onClick={() => window.open(log.tiktokUrl)} /> : null}
+        <Button icon={<Pencil className="size-4" />} onClick={onEdit}>Cập nhật</Button>
+        {onDelete ? <Button className="px-2 text-rose-300" icon={<Trash2 className="size-4" />} onClick={onDelete} /> : null}
+      </div>
+    </article>
+  );
+}
+
+function MetricsModal({ log, onClose, onSave }: { log: UploadLogEntry; onClose: () => void; onSave: (log: UploadLogEntry) => Promise<void> }) {
+  const [draft, setDraft] = useState(log);
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-5" onMouseDown={onClose}>
+      <section className="w-full max-w-lg rounded-lg border border-border bg-[#0c0f13] shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="flex items-center justify-between border-b border-border px-5 py-4"><div><div className="text-xs uppercase tracking-[0.14em] text-accent">TikTok Analytics</div><h2 className="mt-1 text-lg font-semibold text-text">Cập nhật số liệu</h2></div><Button className="px-2" icon={<X className="size-4" />} onClick={onClose} /></header>
+        <div className="grid gap-3 p-5 sm:grid-cols-2">
+          <NumberField label="Lượt xem" value={metric(draft.views)} onChange={(views) => setDraft({ ...draft, views })} />
+          <NumberField label="Lượt thích" value={metric(draft.likes)} onChange={(likes) => setDraft({ ...draft, likes })} />
+          <NumberField label="Bình luận" value={metric(draft.comments)} onChange={(comments) => setDraft({ ...draft, comments })} />
+          <NumberField label="Lượt lưu" value={metric(draft.saves)} onChange={(saves) => setDraft({ ...draft, saves })} />
+          <NumberField label="Chia sẻ" value={metric(draft.shares)} onChange={(shares) => setDraft({ ...draft, shares })} />
+          <NumberField label="Follower tăng" value={metric(draft.followersGained)} onChange={(followersGained) => setDraft({ ...draft, followersGained })} />
+          <label className="grid gap-1.5 text-xs text-muted">Mốc theo dõi<select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as UploadLogEntry['status'] })}><option value="published">Mới đăng</option><option value="tracking">Đang theo dõi</option><option value="winner">Hiệu suất tốt</option><option value="stopped">Dừng theo dõi</option></select></label>
+          <label className="grid gap-1.5 text-xs text-muted sm:col-span-2">Ghi chú<Input value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></label>
+        </div>
+        <footer className="flex justify-end gap-2 border-t border-border px-5 py-4"><Button onClick={onClose}>Hủy</Button><Button variant="primary" onClick={() => void onSave(draft)}>Lưu số liệu</Button></footer>
       </section>
     </div>
   );
 }
 
-function postingStreak(logs: UploadLogEntry[]): number {
-  const days = [...new Set(logs.map((log) => log.uploadedAt.slice(0, 10)))].sort().reverse();
-  if (!days.length) return 0;
-  let streak = 1;
-  let current = new Date(`${days[0]}T00:00:00Z`).getTime();
-  for (let index = 1; index < days.length; index += 1) {
-    const previous = new Date(`${days[index]}T00:00:00Z`).getTime();
-    if (Math.round((current - previous) / 86_400_000) === 1) {
-      streak += 1;
-      current = previous;
-    } else {
-      break;
-    }
+function NumberField({ label, onChange, value }: { label: string; onChange: (value: number) => void; value: number }) {
+  return <label className="grid gap-1.5 text-xs text-muted">{label}<Input type="number" min="0" value={String(value)} onChange={(event) => onChange(Math.max(0, Number(event.target.value) || 0))} /></label>;
+}
+
+function Metric({ accent, helper, label, value }: { accent?: boolean; helper: string; label: string; value: string }) {
+  return <div className="rounded-lg border border-border bg-panel p-4"><div className="text-xs text-muted">{label}</div><div className={cn('mt-2 text-2xl font-semibold text-text', accent && 'text-emerald-300')}>{value}</div><div className="mt-1 text-[11px] text-muted">{helper}</div></div>;
+}
+
+function SmallMetric({ icon, value }: { icon: React.ReactNode; value: number }) {
+  return <div><div className="flex items-center justify-center gap-1 text-muted">{icon}<span className="text-xs">{compactNumber(value)}</span></div></div>;
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <div className="px-5 py-10 text-center text-sm text-muted">{text}</div>;
+}
+
+function buildPostingSlots(logs: UploadLogEntry[]) {
+  const grouped = new Map<number, UploadLogEntry[]>();
+  for (const log of logs.filter((item) => metric(item.views) > 0)) {
+    const date = new Date(log.uploadedAt);
+    if (Number.isNaN(date.getTime())) continue;
+    grouped.set(date.getHours(), [...(grouped.get(date.getHours()) ?? []), log]);
   }
-  return streak;
+  return [...grouped.entries()]
+    .filter(([, entries]) => entries.length >= 2)
+    .map(([hour, entries]) => ({ hour, samples: entries.length, medianViews: median(entries.map((entry) => metric(entry.views))), medianEngagement: median(entries.map((entry) => metric(entry.views) ? ((metric(entry.likes) + metric(entry.comments) + metric(entry.saves) + metric(entry.shares)) / metric(entry.views)) * 100 : 0)) }))
+    .sort((a, b) => b.medianViews - a.medianViews || b.samples - a.samples)
+    .slice(0, 3);
 }
 
-function NumberInput({ label, onChange, value }: { label: string; onChange: (value: number) => void; value: number }) {
-  return (
-    <label className="grid gap-1.5 text-[11px] font-medium text-muted">
-      {label}
-      <Input type="number" min="0" step="1" value={String(value)} onChange={(event) => onChange(Math.max(0, Number(event.target.value) || 0))} />
-    </label>
-  );
-}
-
-function ResultMetric({ accent, label, value }: { accent?: boolean; label: string; value: string }) {
-  return <div className="rounded-lg border border-border bg-panel p-4"><div className="text-xs text-muted">{label}</div><div className={cn('mt-3 text-2xl font-semibold text-text', accent && 'text-emerald-200')}>{value}</div></div>;
-}
-
-function StatusBadge({ copy, status }: { copy: TranslationCopy; status: UploadLogEntry['status'] }) {
-  const labels = { published: copy.published, tracking: copy.tracking, winner: copy.winner, stopped: copy.stopped };
-  return <span className={cn('rounded-md px-2 py-1 text-[11px] font-medium', status === 'winner' ? 'bg-success/15 text-emerald-200' : status === 'stopped' ? 'bg-danger/15 text-rose-200' : 'bg-panelSoft text-muted')}>{labels[status]}</span>;
-}
-
-function currency(value: number) {
-  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value);
-}
+function median(values: number[]) { const sorted = [...values].sort((a, b) => a - b); const middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; }
+function hourRange(hour: number) { return `${String(hour).padStart(2, '0')}:00–${String((hour + 1) % 24).padStart(2, '0')}:00`; }
+function hoursSince(value: string) { return Math.max(0, (Date.now() - new Date(value).getTime()) / 3_600_000); }
+function formatAge(value: string) { const hours = hoursSince(value); return hours < 1 ? 'Vừa đăng' : hours < 24 ? `${Math.floor(hours)} giờ trước` : `${Math.floor(hours / 24)} ngày trước`; }
+function formatPublishedAt(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('vi-VN', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Ho_Chi_Minh' }).format(date); }
+function metric(value: number | undefined) { return Number.isFinite(value) ? Number(value) : 0; }

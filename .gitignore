@@ -18,6 +18,7 @@ data/*.sqlite
 data/*.sqlite-*
 data/threads-session.json
 data/threads-browser-profile/
+data/tiktok-browser-profile/
 
 # Generated video/audio output, caches, and user-provided media
 /video/

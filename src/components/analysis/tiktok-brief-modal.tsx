@@ -1,11 +1,11 @@
 'use client';
 
-import { ArrowDown, ArrowUp, ExternalLink, FolderOpen, Lightbulb, ShoppingBag, Target, Trash2, Video, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CheckCircle2, Clock3, ExternalLink, FolderOpen, Heart, Lightbulb, RotateCcw, ShoppingBag, Target, Trash2, Video, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { TranslationCopy } from '@/lib/i18n';
-import type { AIAnalysis, AssetLibraryItem, Product, ThreadsPost, VideoDraftRequest, VideoDraftVariant } from '@/lib/types';
+import type { AIAnalysis, AssetLibraryItem, Product, ThreadsPost, TtsProvider, TtsVoice, VideoDraftRequest, VideoDraftVariant } from '@/lib/types';
 
 export function TikTokBriefModal({
   analysis,
@@ -15,12 +15,18 @@ export function TikTokBriefModal({
   initialBackgroundPath,
   matchedProduct,
   post,
+  segmentSilenceMs,
+  ttsProvider,
+  ttsSpeed,
+  ttsVoice,
   renderProgress,
   renderedVideoPath,
   renderingVideo,
+  videoApproved,
   onClose,
   onOpenLink,
   onOpenOutputFolder,
+  onSetApproved,
   onRenderVideo
 }: {
   analysis: AIAnalysis;
@@ -30,18 +36,24 @@ export function TikTokBriefModal({
   initialBackgroundPath?: string;
   matchedProduct?: Product;
   post: ThreadsPost;
+  segmentSilenceMs: number;
+  ttsProvider: TtsProvider;
+  ttsSpeed: number;
+  ttsVoice: TtsVoice;
   renderProgress?: { percent: number; message: string } | null;
   renderedVideoPath?: string | null;
   renderingVideo: boolean;
+  videoApproved: boolean;
   onClose: () => void;
   onOpenLink: () => void;
   onOpenOutputFolder: () => void;
+  onSetApproved: (approved: boolean) => void;
   onRenderVideo: (request: Partial<VideoDraftRequest>) => void;
 }) {
   const useOriginalPostReadOnly = !creativeAiEnabled;
   const displayedHooks = useOriginalPostReadOnly ? [] : analysis.hooks;
   const displayedCtas = useOriginalPostReadOnly ? [] : analysis.ctas;
-  const [replies, setReplies] = useState(useOriginalPostReadOnly ? topLikedReplies(post) : analysis.bestReplies);
+  const [replies, setReplies] = useState(topLikedReplies(post));
   const [hookText, setHookText] = useState(useOriginalPostReadOnly ? '' : analysis.hooks[0] || '');
   const [postText, setPostText] = useState(useOriginalPostReadOnly ? post.content : analysis.videoScript.postReadVersion || post.content);
   const [transitionLine, setTransitionLine] = useState(useOriginalPostReadOnly ? '' : analysis.videoScript.transitionLine);
@@ -52,7 +64,7 @@ export function TikTokBriefModal({
   const [productClipPath, setProductClipPath] = useState(matchedDemoPath);
   const [variants, setVariants] = useState<VideoDraftVariant[]>([]);
   useEffect(() => {
-    setReplies(useOriginalPostReadOnly ? topLikedReplies(post) : analysis.bestReplies);
+    setReplies(topLikedReplies(post));
     setHookText(useOriginalPostReadOnly ? '' : analysis.hooks[0] || '');
     setPostText(useOriginalPostReadOnly ? post.content : analysis.videoScript.postReadVersion || post.content);
     setTransitionLine(useOriginalPostReadOnly ? '' : analysis.videoScript.transitionLine);
@@ -63,6 +75,14 @@ export function TikTokBriefModal({
     if (initialBackgroundPath) setBackgroundPath(initialBackgroundPath);
   }, [initialBackgroundPath]);
   const renderRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, productClipPath: productClipPath || undefined, variants: variants.length ? variants : undefined };
+  const estimatedDuration = estimateVideoDuration([
+    hookText,
+    postText,
+    ...replies.map((reply) => reply.content),
+    transitionLine,
+    solutionText,
+    ctaText
+  ], { provider: ttsProvider, voice: ttsVoice, speed: ttsSpeed, segmentSilenceMs });
 
   function addVariant() {
     if (useOriginalPostReadOnly) return;
@@ -164,6 +184,13 @@ export function TikTokBriefModal({
           </> : null}
 
           <BriefSection icon={<Video className="size-4" />} title={useOriginalPostReadOnly ? 'Video content' : 'Pre-render Preview'}>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-sky-400/20 bg-sky-400/5 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-sm font-medium text-sky-200">
+                <Clock3 className="size-4" />
+                Thời lượng ước tính: {formatEstimatedDuration(estimatedDuration.seconds)}
+              </div>
+              <div className="text-xs text-muted">{estimatedDuration.wordCount} từ · post + {replies.length} replies</div>
+            </div>
             {!useOriginalPostReadOnly ? <label className="grid gap-2 text-xs text-muted">{copy.hookOpening}<textarea className="min-h-20 rounded-md border border-border bg-background p-3 text-sm text-text" value={hookText} onChange={(event) => setHookText(event.target.value)} /></label> : null}
             <label className="grid gap-2 text-xs text-muted">
               {useOriginalPostReadOnly ? 'Original post' : 'Post read version'}
@@ -178,7 +205,10 @@ export function TikTokBriefModal({
             <div className="mt-2 space-y-2">
               {replies.map((reply, index) => (
                 <div key={`${reply.id ?? reply.content}-${index}`} className="flex min-w-0 gap-2 overflow-hidden rounded-md border border-border bg-panelSoft p-2">
-                  <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-slate-300 [overflow-wrap:anywhere]">{reply.content}</div>
+                  <div className="min-w-0 flex-1">
+                    <div className="whitespace-pre-wrap break-words text-sm text-slate-300 [overflow-wrap:anywhere]">{reply.content}</div>
+                    <div className="mt-1.5 flex items-center gap-1 text-[11px] text-muted"><Heart className="size-3" />{(reply.likes ?? 0).toLocaleString('vi-VN')} likes</div>
+                  </div>
                   <Button className="h-8 shrink-0 px-2" icon={<ArrowUp className="size-3" />} disabled={index === 0} onClick={() => setReplies(moveItem(replies, index, index - 1))} />
                   <Button className="h-8 shrink-0 px-2" icon={<ArrowDown className="size-3" />} disabled={index === replies.length - 1} onClick={() => setReplies(moveItem(replies, index, index + 1))} />
                   <Button className="h-8 shrink-0 px-2" icon={<Trash2 className="size-3" />} onClick={() => setReplies(replies.filter((_, replyIndex) => replyIndex !== index))} />
@@ -246,7 +276,14 @@ export function TikTokBriefModal({
               {renderingVideo ? copy.renderingVideoDraft : copy.createVideoDraft}
             </Button>
             {renderedVideoPath ? (
-              <Button aria-label={copy.openOutputFolder} title={copy.openOutputFolder} className="px-2" icon={<FolderOpen className="size-4" />} onClick={onOpenOutputFolder} />
+              <>
+                <Button aria-label={copy.openOutputFolder} title={copy.openOutputFolder} className="px-2" icon={<FolderOpen className="size-4" />} onClick={onOpenOutputFolder} />
+                {videoApproved ? (
+                  <Button className="border-emerald-500/30 text-emerald-200" icon={<RotateCcw className="size-4" />} onClick={() => onSetApproved(false)}>Bỏ kiểm duyệt</Button>
+                ) : (
+                  <Button className="bg-emerald-400 text-emerald-950 hover:bg-emerald-300" icon={<CheckCircle2 className="size-4" />} onClick={() => onSetApproved(true)}>ĐÃ KIỂM DUYỆT</Button>
+                )}
+              </>
             ) : null}
           </div>
         </footer>
@@ -265,7 +302,7 @@ function moveItem<T>(items: T[], from: number, to: number) {
 function topLikedReplies(post: ThreadsPost) {
   return [...post.topReplies]
     .filter((reply) => reply.content.trim())
-    .sort((left, right) => right.likes - left.likes)
+    .sort((left, right) => (right.likes ?? 0) - (left.likes ?? 0))
     .slice(0, 10)
     .map((reply) => ({
       id: reply.id,
@@ -279,6 +316,27 @@ function topLikedReplies(post: ThreadsPost) {
       type: 'TOP_LIKED',
       whySelected: 'Top reply by likes'
     }));
+}
+
+function estimateVideoDuration(
+  segments: string[],
+  tts: { provider: TtsProvider; voice: TtsVoice; speed: number; segmentSilenceMs: number }
+) {
+  const spokenSegments = segments.map((segment) => segment.trim()).filter(Boolean);
+  const wordCount = spokenSegments.reduce((total, segment) => total + (segment.match(/\S+/g)?.length ?? 0), 0);
+  const baseWordsPerMinute = tts.provider === 'vieneu'
+    ? tts.voice === 'Ngoc-Huyen-Clone' ? 255 : 230
+    : tts.provider === 'openai' ? 180 : 175;
+  const effectiveWordsPerMinute = baseWordsPerMinute * Math.max(tts.speed, 0.1);
+  const speechSeconds = wordCount / effectiveWordsPerMinute * 60;
+  const transitionSeconds = Math.max(0, spokenSegments.length - 1) * Math.max(tts.segmentSilenceMs, 0) / 1000;
+  return { wordCount, seconds: Math.max(1, Math.round(speechSeconds + transitionSeconds)) };
+}
+
+function formatEstimatedDuration(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes}:${seconds.toString().padStart(2, '0')}` : `${seconds} giây`;
 }
 
 function BriefSection({ children, icon, title }: { children: ReactNode; icon: ReactNode; title: string }) {

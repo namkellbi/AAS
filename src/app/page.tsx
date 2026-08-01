@@ -7,6 +7,7 @@ import { ChevronDown, ExternalLink, Filter, FolderOpen, Link2, LoaderCircle, Log
 import { AnalysisPanel } from '@/components/analysis/analysis-panel';
 import { TikTokBriefModal } from '@/components/analysis/tiktok-brief-modal';
 import { CreateVideoHome } from '@/components/create-video/create-video-home';
+import { VideoReviewQueue } from '@/components/create-video/video-review-queue';
 import { FeedCard } from '@/components/feed/feed-card';
 import { KeywordManager } from '@/components/keywords/keyword-manager';
 import { Sidebar } from '@/components/layout/sidebar';
@@ -229,7 +230,7 @@ export default function HomePage() {
 
   useEffect(() => {
     const api = window.desktopAPI;
-    if (!api || activeView !== 'assets') return;
+    if (!api || !['assets', 'reviews'].includes(activeView)) return;
     void api.getGeneratedVideos().then(setGeneratedVideos);
   }, [activeView]);
 
@@ -315,8 +316,27 @@ export default function HomePage() {
 
   async function handleGenerateTikTokIdea(post: ThreadsPost) {
     setSelectedId(post.id);
+    const api = window.desktopAPI;
+    if (!api) {
+      setError('Desktop API is unavailable. Run this inside Electron.');
+      return;
+    }
+
+    setLoadingRepliesId(post.id);
+    setError(null);
+    let postWithFreshReplies = post;
+    try {
+      postWithFreshReplies = await api.fetchPostReplies(post);
+      setPosts((currentPosts) => mergePosts([postWithFreshReplies], currentPosts));
+    } catch (replyError) {
+      setError(replyError instanceof Error ? replyError.message : String(replyError));
+      return;
+    } finally {
+      setLoadingRepliesId(null);
+    }
+
     const current = analysis[post.id];
-    const result = current?.scriptOutline.length && current.productSearchKeywords.length ? current : await handleAnalyze(post);
+    const result = current?.scriptOutline.length && current.productSearchKeywords.length ? current : await handleAnalyze(postWithFreshReplies);
     if (result) setBriefPostId(post.id);
   }
 
@@ -406,6 +426,7 @@ export default function HomePage() {
     try {
       const result = await api.renderVideoDraft({ post: briefPost, analysis: briefAnalysis, ...overrides });
       if (result.filePath) setRenderedVideoPath(result.filePath);
+      setGeneratedVideos(await api.getGeneratedVideos());
       showHealth({ ok: result.ok, message: result.ok ? copy.videoDraftReady : result.message });
     } catch (renderError) {
       setError(renderError instanceof Error ? renderError.message : String(renderError));
@@ -636,13 +657,59 @@ export default function HomePage() {
               isCreatingFromLink={isCreatingFromLink}
               language={language}
               openAiReady={Boolean(settings?.openAiApiKeySet)}
-              posts={posts}
               threadsReady={Boolean(settings?.threadsSessionExists)}
               onCreateFromLink={createFromLink}
               onCreateLinkUrl={setCreateLinkUrl}
               onNavigateSettings={() => changeView('settings')}
+            />
+          ) : activeView === 'reviews' ? (
+            <VideoReviewQueue
+              language={language}
+              posts={posts}
+              videos={generatedVideos}
+              onApprove={async (filePath, approved) => {
+                const updated = await window.desktopAPI?.setGeneratedVideoApproved(filePath, approved);
+                if (updated) setGeneratedVideos(updated);
+              }}
               onOpenDraft={handleGenerateTikTokIdea}
               onOpenLink={openPostLink}
+              onOpenVideo={(filePath) => void window.desktopAPI?.openGeneratedVideo(filePath)}
+              onPublish={async (filePath, caption) => {
+                const result = await window.desktopAPI?.publishGeneratedVideo(filePath, caption);
+                if (!result) return;
+                setGeneratedVideos(result.videos);
+                showHealth({ ok: result.ok, message: result.message });
+                if (result.publishedUrl) {
+                  const video = result.videos.find((item) => item.filePath === filePath);
+                  const post = video ? posts.find((item) => item.id === video.postId) : undefined;
+                  if (post) {
+                    await window.desktopAPI?.saveUploadLog({
+                      id: crypto.randomUUID(),
+                      postId: post.id,
+                      tiktokUrl: result.publishedUrl,
+                      productName: '',
+                      hook: caption.slice(0, 160),
+                      contentFormat: 'threads-story',
+                      uploadedAt: new Date().toISOString(),
+                      views: 0,
+                      likes: 0,
+                      clicks: 0,
+                      orders: 0,
+                      revenue: 0,
+                      commission: 0,
+                      status: 'published',
+                      note: 'Đăng tự động từ hàng đợi xuất bản.',
+                      contentGoal: analysis[post.id]?.contentGoal ?? 'engagement',
+                      followersGained: 0,
+                      comments: 0,
+                      saves: 0,
+                      shares: 0,
+                      variantLabel: ''
+                    });
+                    setUploadLogs(await window.desktopAPI!.getUploadLogs());
+                  }
+                }
+              }}
             />
           ) : activeView === 'opportunities' ? (
             <OpportunityInbox
@@ -759,6 +826,12 @@ export default function HomePage() {
                   await refreshKeywordWorkspace();
                 }
               }}
+              onSync={async () => {
+                const result = await window.desktopAPI?.syncTikTokPerformance();
+                if (!result) return;
+                setUploadLogs(result.logs);
+                showHealth({ ok: result.ok, message: result.message });
+              }}
             />
           ) : (
             <FeedView
@@ -795,8 +868,13 @@ export default function HomePage() {
           initialBackgroundPath={briefInitialBackground}
           matchedProduct={briefAnalysis.matchedProductId ? products.find((product) => product.id === briefAnalysis.matchedProductId) : undefined}
           post={briefPost}
+          segmentSilenceMs={settings?.segmentSilenceMs ?? 400}
+          ttsProvider={settings?.ttsProvider ?? 'openai'}
+          ttsSpeed={settings?.defaultSpeed ?? 1.1}
+          ttsVoice={settings?.defaultVoice ?? 'nova'}
           renderProgress={videoRenderProgress}
           renderedVideoPath={renderedVideoPath}
+          videoApproved={Boolean(generatedVideos.find((video) => video.filePath === renderedVideoPath)?.reviewStatus === 'approved')}
           renderingVideo={isRenderingVideo}
           onClose={() => {
             setBriefPostId(null);
@@ -804,6 +882,11 @@ export default function HomePage() {
           }}
           onOpenLink={() => openPostLink(briefPost)}
           onOpenOutputFolder={handleOpenVideoOutputFolder}
+          onSetApproved={async (approved) => {
+            if (!renderedVideoPath) return;
+            const updated = await window.desktopAPI?.setGeneratedVideoApproved(renderedVideoPath, approved);
+            if (updated) setGeneratedVideos(updated);
+          }}
           onRenderVideo={handleRenderVideoDraft}
         />
       ) : null}
@@ -1802,6 +1885,8 @@ function titleForView(view: string, copy: TranslationCopy) {
       return copy.createFromLinkTitle;
     case 'opportunities':
       return copy.opportunityInbox;
+    case 'reviews':
+      return 'Duyệt video';
     case 'trending':
       return copy.trendingFeed;
     case 'keywords':
@@ -1813,7 +1898,7 @@ function titleForView(view: string, copy: TranslationCopy) {
     case 'assets':
       return 'Kho clip';
     case 'uploads':
-      return copy.results;
+      return 'Hiệu suất';
     case 'settings':
       return copy.settings;
     default:
@@ -1824,6 +1909,7 @@ function titleForView(view: string, copy: TranslationCopy) {
 function sectionLabelForView(view: string) {
   return {
     home: 'Video workspace',
+    reviews: 'Publishing queue',
     opportunities: 'Smart Inbox',
     trending: 'Research',
     keywords: 'Sources',
@@ -1839,6 +1925,7 @@ function isViewEnabled(view: string, features: AppSettings['featureVisibility'])
   if (['opportunities', 'trending', 'keywords', 'saved'].includes(view)) return features.opportunityDiscovery;
   if (view === 'products') return features.affiliateWorkspace;
   if (view === 'assets') return true;
-  if (view === 'uploads') return features.resultsTracking;
+  if (view === 'reviews') return true;
+  if (view === 'uploads') return true;
   return true;
 }

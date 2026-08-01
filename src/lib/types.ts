@@ -453,11 +453,28 @@ export type AssetLibraryItem = {
 
 export type GeneratedVideoItem = {
   id: string;
+  postId: string;
   label: string;
   filePath: string;
   createdAt: string;
   sizeBytes: number;
+  reviewStatus: 'pending' | 'approved';
+  approvedAt?: string;
+  publishStatus: 'not_published' | 'publishing' | 'published' | 'failed' | 'verification_required';
+  publishedUrl?: string;
+  publishCaption?: string;
+  publishError?: string;
   thumbnailDataUrl?: string;
+};
+
+export type TikTokPublishResult = ServiceHealth & {
+  publishedUrl?: string;
+  videos: GeneratedVideoItem[];
+};
+
+export type TikTokPerformanceSyncResult = ServiceHealth & {
+  logs: UploadLogEntry[];
+  updated: number;
 };
 
 export type UploadLogEntry = {
@@ -469,6 +486,7 @@ export type UploadLogEntry = {
   contentFormat: string;
   uploadedAt: string;
   views: number;
+  likes: number;
   clicks: number;
   orders: number;
   revenue: number;
@@ -554,6 +572,9 @@ export type DesktopAPI = {
   getGeneratedVideos: () => Promise<GeneratedVideoItem[]>;
   openGeneratedVideo: (filePath: string) => Promise<ServiceHealth>;
   deleteGeneratedVideo: (filePath: string) => Promise<void>;
+  setGeneratedVideoApproved: (filePath: string, approved: boolean) => Promise<GeneratedVideoItem[]>;
+  publishGeneratedVideo: (filePath: string, caption: string) => Promise<TikTokPublishResult>;
+  syncTikTokPerformance: () => Promise<TikTokPerformanceSyncResult>;
   getUploadLogs: () => Promise<UploadLogEntry[]>;
   saveUploadLog: (entry: UploadLogEntry) => Promise<UploadLogEntry>;
   deleteUploadLog: (id: string) => Promise<void>;

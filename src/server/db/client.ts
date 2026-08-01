@@ -103,6 +103,7 @@ function migrateSchema(database: Database.Database) {
   ensureColumn(database, 'upload_log', 'content_goal', "TEXT NOT NULL DEFAULT 'affiliate'");
   ensureColumn(database, 'upload_log', 'followers_gained', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'upload_log', 'comments', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'upload_log', 'likes', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'upload_log', 'saves', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'upload_log', 'shares', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'upload_log', 'product_id', 'TEXT');
@@ -978,13 +979,13 @@ export function saveUploadLog(entry: UploadLogEntry): UploadLogEntry {
     .prepare(`
       INSERT INTO upload_log (
         id, post_id, tiktok_url, product_name, hook, content_format, uploaded_at,
-        views, clicks, orders, revenue, commission, status, note,
+        views, likes, clicks, orders, revenue, commission, status, note,
         content_goal, followers_gained, comments, saves, shares, product_id, variant_label
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET post_id = excluded.post_id, tiktok_url = excluded.tiktok_url,
         product_name = excluded.product_name, hook = excluded.hook, content_format = excluded.content_format,
-        uploaded_at = excluded.uploaded_at, views = excluded.views, clicks = excluded.clicks,
+        uploaded_at = excluded.uploaded_at, views = excluded.views, likes = excluded.likes, clicks = excluded.clicks,
         orders = excluded.orders, revenue = excluded.revenue, commission = excluded.commission,
         status = excluded.status, note = excluded.note,
         content_goal = excluded.content_goal, followers_gained = excluded.followers_gained,
@@ -1000,6 +1001,7 @@ export function saveUploadLog(entry: UploadLogEntry): UploadLogEntry {
       entry.contentFormat,
       entry.uploadedAt || nowIso(),
       entry.views,
+      entry.likes ?? 0,
       entry.clicks,
       entry.orders,
       entry.revenue,
@@ -1038,6 +1040,7 @@ export function getAffiliatePerformanceContext() {
     hook: String(row.hook ?? ''),
     contentFormat: String(row.content_format ?? ''),
     views: Number(row.views ?? 0),
+    likes: Number(row.likes ?? 0),
     clicks: Number(row.clicks ?? 0),
     orders: Number(row.orders ?? 0),
     revenue: Number(row.revenue ?? 0),
@@ -1356,6 +1359,7 @@ function rowToUploadLog(row: Record<string, unknown>): UploadLogEntry {
     contentFormat: String(row.content_format ?? ''),
     uploadedAt: String(row.uploaded_at),
     views: Number(row.views ?? 0),
+    likes: Number(row.likes ?? 0),
     clicks: Number(row.clicks ?? 0),
     orders: Number(row.orders ?? 0),
     revenue: Number(row.revenue ?? 0),

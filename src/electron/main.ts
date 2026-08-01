@@ -47,7 +47,8 @@ import { getThreadsLoginStatus, openThreadsLoginSession } from '@/server/scraper
 import { renderVideoDraft } from '@/server/video/videoDraftService';
 import { createTtsPreview, testGeminiConnection } from '@/server/video/ttsService';
 import { getVieneuLocalStatus, stopVieneuLocalService } from '@/server/video/vieneuLocalService';
-import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, registerAsset } from '@/server/services/assetLibraryService';
+import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, registerAsset, setGeneratedVideoApproved } from '@/server/services/assetLibraryService';
+import { publishGeneratedVideoToTikTok, syncTikTokPerformance } from '@/server/services/tiktokPublishingService';
 import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
 import { isTtsVoiceForProvider } from '@/lib/tts';
 
@@ -225,10 +226,13 @@ function registerIpc() {
   });
   ipcMain.handle('generated-videos:list', async () => listGeneratedVideos());
   ipcMain.handle('generated-videos:open', async (_event, filePath: string) => {
-    const error = await shell.openPath(assertGeneratedVideoPath(filePath));
-    return error ? { ok: false, message: error } : { ok: true, message: 'Opening generated video.' };
+    shell.showItemInFolder(assertGeneratedVideoPath(filePath));
+    return { ok: true, message: 'Opening export folder.' };
   });
   ipcMain.handle('generated-videos:delete', async (_event, filePath: string) => deleteGeneratedVideo(filePath));
+  ipcMain.handle('generated-videos:set-approved', async (_event, filePath: string, approved: boolean) => setGeneratedVideoApproved(filePath, approved));
+  ipcMain.handle('generated-videos:publish-tiktok', async (_event, filePath: string, caption: string) => publishGeneratedVideoToTikTok(filePath, caption));
+  ipcMain.handle('tiktok:sync-performance', async () => syncTikTokPerformance());
   ipcMain.handle('upload-log:list', async () => listUploadLogs());
   ipcMain.handle('upload-log:save', async (_event, entry: UploadLogEntry) => saveUploadLog(entry));
   ipcMain.handle('upload-log:delete', async (_event, id: string) => deleteUploadLog(id));
