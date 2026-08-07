@@ -6,6 +6,7 @@ export type ThreadsReply = {
   id: string;
   author: string;
   authorAvatarUrl?: string;
+  mediaUrls?: string[];
   content: string;
   likes: number;
   replies?: number;
@@ -70,6 +71,7 @@ export type SelectedReply = {
   id?: string;
   author?: string;
   authorAvatarUrl?: string;
+  mediaUrls?: string[];
   likes?: number;
   replies?: number;
   reposts?: number;
@@ -342,6 +344,9 @@ export type VideoDraftRequest = {
   selectedReplies?: SelectedReply[];
   hookText?: string;
   postReadVersion?: string;
+  postTtsText?: string;
+  replyTtsTexts?: string[];
+  speechTextsFinalized?: boolean;
   transitionLine?: string;
   solutionText?: string;
   ctaText?: string;
@@ -475,6 +480,8 @@ export type TikTokPublishResult = ServiceHealth & {
 export type TikTokPerformanceSyncResult = ServiceHealth & {
   logs: UploadLogEntry[];
   updated: number;
+  eligible: number;
+  remaining: number;
 };
 
 export type UploadLogEntry = {
@@ -500,6 +507,7 @@ export type UploadLogEntry = {
   shares: number;
   productId?: string;
   variantLabel: string;
+  lastSyncedAt?: string;
 };
 
 export type ReadinessThresholds = {
@@ -558,6 +566,7 @@ export type DesktopAPI = {
   testGemini: () => Promise<ServiceHealth>;
   getLocalTtsStatus: () => Promise<LocalTtsStatus>;
   previewTts: (request: TtsPreviewRequest) => Promise<TtsPreviewResult>;
+  normalizeSpeech: (texts: string[], relatedPostId?: string) => Promise<string[]>;
   openOpenAiBilling: () => Promise<ServiceHealth>;
   openGeminiApiKeys: () => Promise<ServiceHealth>;
   getThreadsLoginStatus: () => Promise<ServiceHealth>;

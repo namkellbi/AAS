@@ -108,6 +108,7 @@ function migrateSchema(database: Database.Database) {
   ensureColumn(database, 'upload_log', 'shares', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'upload_log', 'product_id', 'TEXT');
   ensureColumn(database, 'upload_log', 'variant_label', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'upload_log', 'last_synced_at', 'TEXT');
   database.exec('DROP TABLE IF EXISTS video_queue');
   database
     .prepare("DELETE FROM app_settings WHERE key IN ('video.auto_send_to_queue', 'app.allow_demo_mode', 'elevenlabs.api_key', 'elevenlabs.voice_id')")
@@ -980,9 +981,9 @@ export function saveUploadLog(entry: UploadLogEntry): UploadLogEntry {
       INSERT INTO upload_log (
         id, post_id, tiktok_url, product_name, hook, content_format, uploaded_at,
         views, likes, clicks, orders, revenue, commission, status, note,
-        content_goal, followers_gained, comments, saves, shares, product_id, variant_label
+        content_goal, followers_gained, comments, saves, shares, product_id, variant_label, last_synced_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET post_id = excluded.post_id, tiktok_url = excluded.tiktok_url,
         product_name = excluded.product_name, hook = excluded.hook, content_format = excluded.content_format,
         uploaded_at = excluded.uploaded_at, views = excluded.views, likes = excluded.likes, clicks = excluded.clicks,
@@ -990,7 +991,8 @@ export function saveUploadLog(entry: UploadLogEntry): UploadLogEntry {
         status = excluded.status, note = excluded.note,
         content_goal = excluded.content_goal, followers_gained = excluded.followers_gained,
         comments = excluded.comments, saves = excluded.saves, shares = excluded.shares,
-        product_id = excluded.product_id, variant_label = excluded.variant_label
+        product_id = excluded.product_id, variant_label = excluded.variant_label,
+        last_synced_at = excluded.last_synced_at
     `)
     .run(
       id,
@@ -1014,7 +1016,8 @@ export function saveUploadLog(entry: UploadLogEntry): UploadLogEntry {
       entry.saves ?? 0,
       entry.shares ?? 0,
       entry.productId || null,
-      entry.variantLabel ?? ''
+      entry.variantLabel ?? '',
+      entry.lastSyncedAt || null
     );
   return { ...entry, id, uploadedAt: entry.uploadedAt || nowIso() };
 }
@@ -1372,7 +1375,8 @@ function rowToUploadLog(row: Record<string, unknown>): UploadLogEntry {
     saves: Number(row.saves ?? 0),
     shares: Number(row.shares ?? 0),
     productId: row.product_id ? String(row.product_id) : undefined,
-    variantLabel: String(row.variant_label ?? '')
+    variantLabel: String(row.variant_label ?? ''),
+    lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined
   };
 }
 

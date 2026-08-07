@@ -5,7 +5,7 @@
 import { CheckCircle2, CircleDashed, ExternalLink, LoaderCircle, Play, Send, Video, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { ensureTikTokHashtags } from '@/lib/tiktokCaption';
+import { normalizeTikTokCaption } from '@/lib/tiktokCaption';
 import type { GeneratedVideoItem, ThreadsPost } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -91,7 +91,7 @@ export function VideoReviewQueue({
                   disabled={Boolean(publishingPath)}
                   onClick={() => {
                     setPublishTarget(video);
-                    setCaptionDraft(ensureTikTokHashtags(video.publishCaption ?? ''));
+                    setCaptionDraft(normalizeTikTokCaption(video.publishCaption ?? ''));
                   }}
                 >
                   {publishingPath === video.filePath

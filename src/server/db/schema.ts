@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS upload_log (
   shares INTEGER NOT NULL DEFAULT 0,
   product_id TEXT,
   variant_label TEXT NOT NULL DEFAULT '',
+  last_synced_at TEXT,
   FOREIGN KEY(post_id) REFERENCES threads_posts(id) ON DELETE CASCADE
 );
 `;

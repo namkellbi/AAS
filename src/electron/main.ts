@@ -16,6 +16,7 @@ import {
   getAsset,
   getDb,
   getProduct,
+  getOpenAiApiKey,
   getUsageSummary,
   listKeywords,
   listKeywordExclusions,
@@ -46,6 +47,7 @@ import { scanOpportunityInbox } from '@/server/services/opportunityScanService';
 import { getThreadsLoginStatus, openThreadsLoginSession } from '@/server/scraper/threadsScraper';
 import { renderVideoDraft } from '@/server/video/videoDraftService';
 import { createTtsPreview, testGeminiConnection } from '@/server/video/ttsService';
+import { normalizeVietnameseSpeechBatch } from '@/server/video/speechNormalizationService';
 import { getVieneuLocalStatus, stopVieneuLocalService } from '@/server/video/vieneuLocalService';
 import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, registerAsset, setGeneratedVideoApproved } from '@/server/services/assetLibraryService';
 import { publishGeneratedVideoToTikTok, syncTikTokPerformance } from '@/server/services/tiktokPublishingService';
@@ -170,6 +172,12 @@ function registerIpc() {
   ipcMain.handle('gemini:test', async () => testGeminiConnection());
   ipcMain.handle('tts:local-status', async () => getVieneuLocalStatus());
   ipcMain.handle('tts:preview', async (_event, request: TtsPreviewRequest) => createTtsPreview(request));
+  ipcMain.handle('tts:normalize', async (_event, texts: string[], relatedPostId?: string) => {
+    if (!Array.isArray(texts) || texts.length > 20 || texts.some((text) => typeof text !== 'string' || text.length > 10000)) {
+      throw new Error('Nội dung chuẩn hóa TTS không hợp lệ.');
+    }
+    return normalizeVietnameseSpeechBatch(texts, getOpenAiApiKey(), relatedPostId);
+  });
   ipcMain.handle('shell:open-openai-billing', async () => {
     await shell.openExternal('https://platform.openai.com/settings/organization/billing/overview');
     return { ok: true, message: 'Opening OpenAI Billing dashboard.' };
@@ -195,7 +203,7 @@ function registerIpc() {
     sendProgress(12, 'Chuẩn bị clip demo sản phẩm nếu có...');
     const matchedProduct = request.analysis.matchedProductId ? getProduct(request.analysis.matchedProductId) : null;
     let demoPath = request.productClipPath;
-    if (!demoPath && matchedProduct?.demoAssetId) {
+    if (demoPath === undefined && matchedProduct?.demoAssetId) {
       const demoAsset = getAsset(matchedProduct.demoAssetId);
       if (demoAsset) demoPath = demoAsset.filePath;
     }

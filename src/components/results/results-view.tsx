@@ -58,7 +58,7 @@ export function ResultsView({ logs, posts, onDelete, onSave, onSync }: {
         <Metric label="Video đã đăng" value={String(ordered.length)} helper="Được ghi tự động" />
         <Metric label="Tổng lượt xem" value={compactNumber(totals.views)} helper={`Trung bình ${compactNumber(averageViews)}/video`} />
         <Metric label="Tỷ lệ tương tác" value={`${engagementRate.toFixed(1)}%`} helper="Like + comment + lưu + chia sẻ" />
-        <Metric label="Follower tăng" value={`+${compactNumber(totals.followers)}`} helper="Từ các video đã theo dõi" accent />
+        <Metric label="Follower tài khoản tăng" value={`+${compactNumber(totals.followers)}`} helper="So với lúc bắt đầu theo dõi tài khoản" accent />
       </section>
 
       <section className="rounded-lg border border-border bg-panel p-4">

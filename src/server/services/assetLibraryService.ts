@@ -20,14 +20,11 @@ export async function syncBackgroundAssetsFromResources() {
     .filter((entry) => entry.isFile() && videoExtensions.has(path.extname(entry.name).toLowerCase()))
     .map((entry) => path.join(resourcesDir, entry.name))
     .sort((left, right) => left.localeCompare(right));
-  const dateCounts = new Map<string, number>();
-
   await Promise.all(
     files.map(async (filePath) => {
-      const datePart = formatDate(fs.statSync(filePath).mtime);
-      const count = (dateCounts.get(datePart) ?? 0) + 1;
-      dateCounts.set(datePart, count);
-      const label = `rednote_${datePart}${count > 1 ? `_${count}` : ''}`;
+      // A stable, recognizable label prevents the displayed name from moving
+      // to another clip when files are added or renamed.
+      const label = path.basename(filePath);
       try {
         await registerAsset('background', filePath, label);
       } catch {
@@ -127,10 +124,9 @@ function readDefaultCaption(filePath: string) {
     const metadataPath = isLegacyFinalVideo(filePath)
       ? path.join(path.dirname(filePath), 'tiktok-metadata.json')
       : path.join(path.dirname(filePath), '_work', 'tiktok-metadata.json');
-    const value = JSON.parse(fs.readFileSync(metadataPath, 'utf8')) as { caption_variants?: unknown; hashtags?: unknown };
+    const value = JSON.parse(fs.readFileSync(metadataPath, 'utf8')) as { caption_variants?: unknown };
     const caption = Array.isArray(value.caption_variants) && typeof value.caption_variants[0] === 'string' ? value.caption_variants[0].trim() : '';
-    const hashtags = Array.isArray(value.hashtags) ? value.hashtags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.startsWith('#') ? tag : `#${tag}`).join(' ') : '';
-    return [caption, hashtags].filter(Boolean).join('\n');
+    return caption;
   } catch {
     return '';
   }
@@ -213,12 +209,6 @@ function runProcess(command: string, args: string[]) {
 
 function thumbnailPath(id: string) {
   return path.resolve(process.cwd(), 'data', 'video-thumbnails', `${id}.jpg`);
-}
-
-function formatDate(value: Date) {
-  const day = String(value.getDate()).padStart(2, '0');
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  return `${day}${month}${value.getFullYear()}`;
 }
 
 function findFinalVideos(root: string) {

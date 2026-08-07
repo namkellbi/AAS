@@ -1,6 +1,6 @@
 import type { AIAnalysis, CreateFromLinkProgress, CreateFromLinkResult } from '@/lib/types';
 import { analyzeAffiliateOpportunity } from '@/server/ai/affiliateAnalysisService';
-import { getAnalysis, getCreativeAiEnabled, getOpenAiApiKey, listAssets } from '@/server/db/client';
+import { getAnalysis, getCreativeAiEnabled, getOpenAiApiKey, getSetting, listAssets, setSetting } from '@/server/db/client';
 import { importAndStoreThreadsPost } from '@/server/services/fetchService';
 
 export async function createVideoFromLink(url: string, onProgress: (progress: CreateFromLinkProgress) => void = () => {}): Promise<CreateFromLinkResult> {
@@ -20,19 +20,17 @@ export async function createVideoFromLink(url: string, onProgress: (progress: Cr
     analysis = await analyzeAffiliateOpportunity(post);
   }
 
-  const backgroundPath = pickLeastRecentlyUsedBackground();
+  const backgroundPath = pickRandomBackground();
   onProgress({ phase: 'ready', percent: 100, message: 'Brief đã sẵn sàng.' });
   return { post, analysis, backgroundPath: backgroundPath ?? undefined };
 }
 
-function pickLeastRecentlyUsedBackground(): string | null {
+function pickRandomBackground(): string | null {
   const backgrounds = listAssets().filter((asset) => asset.type === 'background');
   if (!backgrounds.length) return null;
-  backgrounds.sort((a, b) => {
-    if (!a.lastUsedAt && b.lastUsedAt) return -1;
-    if (a.lastUsedAt && !b.lastUsedAt) return 1;
-    if (a.lastUsedAt && b.lastUsedAt && a.lastUsedAt !== b.lastUsedAt) return a.lastUsedAt.localeCompare(b.lastUsedAt);
-    return a.timesUsed - b.timesUsed;
-  });
-  return backgrounds[0].filePath;
+  const last = getSetting('video.last_background_clip');
+  const pool = backgrounds.length > 1 ? backgrounds.filter((asset) => asset.filePath !== last) : backgrounds;
+  const selected = pool[Math.floor(Math.random() * pool.length)] ?? backgrounds[0];
+  setSetting('video.last_background_clip', selected.filePath);
+  return selected.filePath;
 }

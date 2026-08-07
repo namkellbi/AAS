@@ -324,11 +324,13 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
       const reposts = maxMetric(interactionMetric(container, ['repost', 'dang lai']), lineMetrics[2]);
       const shares = maxMetric(interactionMetric(container, ['share', 'send', 'chia se', 'gui']), lineMetrics[3]);
       const authorAvatarUrl = findAuthorAvatar(container, match[1]);
+      const mediaUrls = findReplyMedia(container, authorAvatarUrl);
       seen.add(match[2]);
       replies.push({
         id: match[2],
         author: match[1],
         ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
+        ...(mediaUrls.length ? { mediaUrls } : {}),
         content: content.slice(0, 500),
         likes,
         ...(replyCount === undefined ? {} : { replies: replyCount }),
@@ -349,6 +351,22 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
         })
         ?? images.find((candidate) => (candidate.alt ?? '').toLocaleLowerCase().includes('profile picture') && candidate.width >= 30 && candidate.width <= 80);
       return image?.currentSrc || image?.src || undefined;
+    }
+
+    function findReplyMedia(container: HTMLElement, avatarUrl?: string) {
+      const urls: string[] = [];
+      for (const image of Array.from(container.querySelectorAll<HTMLImageElement>('img[src]'))) {
+        const url = image.currentSrc || image.src;
+        const alt = (image.alt ?? '').toLocaleLowerCase();
+        const width = Math.max(image.naturalWidth || 0, image.getBoundingClientRect().width);
+        const height = Math.max(image.naturalHeight || 0, image.getBoundingClientRect().height);
+        if (!url || url === avatarUrl || alt.includes('profile picture') || width < 140 || height < 100) continue;
+        urls.push(url);
+      }
+      for (const video of Array.from(container.querySelectorAll<HTMLVideoElement>('video'))) {
+        if (video.poster) urls.push(video.poster);
+      }
+      return Array.from(new Set(urls)).slice(0, 4);
     }
 
     function directReplyText(container: HTMLElement) {
@@ -427,7 +445,8 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
         likes: Math.max(existing.likes, reply.likes),
         replies: maxKnownMetric(existing.replies, reply.replies),
         reposts: maxKnownMetric(existing.reposts, reply.reposts),
-        shares: maxKnownMetric(existing.shares, reply.shares)
+        shares: maxKnownMetric(existing.shares, reply.shares),
+        mediaUrls: Array.from(new Set([...(existing.mediaUrls ?? []), ...(reply.mediaUrls ?? [])])).slice(0, 4)
       } : reply);
     }
     unchangedPasses = collected.size === previousSize ? unchangedPasses + 1 : 0;
@@ -447,30 +466,39 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
 
 async function embedReplyAvatars(page: Page, replies: ThreadsReply[]): Promise<ThreadsReply[]> {
   const cache = new Map<string, Promise<string | undefined>>();
-  return Promise.all(replies.map(async (reply) => {
-    const avatarUrl = reply.authorAvatarUrl;
-    if (!avatarUrl || avatarUrl.startsWith('data:')) return reply;
-    let embedded = cache.get(avatarUrl);
+  const embedUrl = (url: string, maximumBytes: number) => {
+    if (url.startsWith('data:')) return Promise.resolve(url);
+    let embedded = cache.get(url);
     if (!embedded) {
       embedded = (async () => {
         try {
-          const response = await page.context().request.get(avatarUrl, {
+          const response = await page.context().request.get(url, {
             headers: { Referer: 'https://www.threads.com/' },
-            timeout: 10_000
+            timeout: 15_000
           });
           if (!response.ok()) return undefined;
           const body = await response.body();
-          if (!body.length || body.length > 500_000) return undefined;
+          if (!body.length || body.length > maximumBytes) return undefined;
           const contentType = response.headers()['content-type']?.split(';')[0] || 'image/jpeg';
+          if (!contentType.startsWith('image/')) return undefined;
           return `data:${contentType};base64,${body.toString('base64')}`;
         } catch {
           return undefined;
         }
       })();
-      cache.set(avatarUrl, embedded);
+      cache.set(url, embedded);
     }
-    const dataUrl = await embedded;
-    return dataUrl ? { ...reply, authorAvatarUrl: dataUrl } : reply;
+    return embedded;
+  };
+  return Promise.all(replies.map(async (reply) => {
+    const avatar = reply.authorAvatarUrl ? await embedUrl(reply.authorAvatarUrl, 500_000) : undefined;
+    const media = (await Promise.all((reply.mediaUrls ?? []).slice(0, 2).map((url) => embedUrl(url, 8_000_000))))
+      .filter((url): url is string => Boolean(url));
+    return {
+      ...reply,
+      ...(avatar ? { authorAvatarUrl: avatar } : {}),
+      ...(media.length ? { mediaUrls: media } : {})
+    };
   }));
 }
 

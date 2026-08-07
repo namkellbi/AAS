@@ -170,7 +170,19 @@ export async function analyzeAffiliateOpportunity(post: ThreadsPost, goal: Conte
               local_affiliate_fit_score: post.affiliateFitScore,
               local_opportunity_score: post.opportunityScore,
               emotional_category: post.emotionalCategory,
-              top_replies: post.topReplies
+              // Media and avatars may be embedded as multi-megabyte data URLs
+              // for deterministic video rendering. The model only needs the
+              // reply identity, text and engagement metrics.
+              top_replies: post.topReplies.map((reply) => ({
+                id: reply.id,
+                author: reply.author,
+                content: reply.content,
+                likes: reply.likes,
+                replies: reply.replies,
+                reposts: reply.reposts,
+                shares: reply.shares,
+                has_media: Boolean(reply.mediaUrls?.length)
+              }))
             }
           })
         }
@@ -284,6 +296,7 @@ function normalizeBestReplies(value: unknown, sourceReplies: ThreadsPost['topRep
         id: source.id,
         author: source.author,
         authorAvatarUrl: source.authorAvatarUrl,
+        mediaUrls: source.mediaUrls,
         likes: source.likes,
         replies: source.replies,
         reposts: source.reposts,

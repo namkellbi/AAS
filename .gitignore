@@ -23,7 +23,6 @@ data/tiktok-browser-profile/
 # Generated video/audio output, caches, and user-provided media
 /video/
 data/video-exports/
-data/video-resources/
 data/video-thumbnails/
 data/tts-cache/
 data/transcript-cache/

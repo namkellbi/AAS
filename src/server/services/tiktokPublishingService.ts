@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { chromium, type BrowserContext, type Locator, type Page } from 'playwright';
 import type { TikTokPerformanceSyncResult, TikTokPublishResult } from '@/lib/types';
-import { ensureTikTokHashtags } from '@/lib/tiktokCaption';
+import { normalizeTikTokCaption } from '@/lib/tiktokCaption';
 import { assertGeneratedVideoPath, listGeneratedVideos, setGeneratedVideoPublishState } from '@/server/services/assetLibraryService';
 import { getSetting, listUploadLogs, saveUploadLog, setSetting } from '@/server/db/client';
 
@@ -16,11 +16,16 @@ const chromeUserDataDir = process.env.LOCALAPPDATA
   ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'User Data')
   : dedicatedProfileDir;
 const automationProfileEmail = 'commentdao.work@gmail.com';
+const syncBatchSize = 30;
+const minuteMs = 60_000;
+const dayMs = 24 * 60 * minuteMs;
 
 export async function syncTikTokPerformance(): Promise<TikTokPerformanceSyncResult> {
   const logs = listUploadLogs();
-  const candidates = logs.filter((log) => /^https?:\/\/(?:www\.)?tiktok\.com\//i.test(log.tiktokUrl));
-  if (!candidates.length) return { ok: true, message: 'Chưa có video TikTok nào để đồng bộ.', logs, updated: 0 };
+  const tracked = logs.filter((log) => log.status !== 'stopped' && getTikTokUsername(log.tiktokUrl));
+  const due = tracked.filter(isDueForSync);
+  const candidates = due.slice(0, syncBatchSize);
+  if (!tracked.length) return { ok: true, message: 'Chưa có video TikTok nào để đồng bộ.', logs, updated: 0, eligible: 0, remaining: 0 };
 
   let context: BrowserContext | undefined;
   let updated = 0;
@@ -42,31 +47,37 @@ export async function syncTikTokPerformance(): Promise<TikTokPerformanceSyncResu
           comments: metrics.comments ?? log.comments ?? 0,
           saves: metrics.saves ?? log.saves ?? 0,
           shares: metrics.shares ?? log.shares ?? 0,
-          status: log.status === 'published' ? 'tracking' : log.status
+          status: log.status === 'published' ? 'tracking' : log.status,
+          lastSyncedAt: new Date().toISOString()
         });
         updated += 1;
       } catch (error) {
+        saveUploadLog({ ...log, lastSyncedAt: new Date().toISOString() });
         errors.push(`${log.tiktokUrl}: ${cleanBrowserError(error instanceof Error ? error.message : String(error))}`);
       }
     }
-    await syncFollowerGrowth(page).catch(() => undefined);
+    await syncFollowerGrowth(page, tracked[0].tiktokUrl).catch(() => undefined);
+    const remaining = Math.max(0, due.length - candidates.length);
     const message = errors.length
-      ? `Đã cập nhật ${updated}/${candidates.length} video. ${errors.length} video chưa đọc được số liệu.`
-      : `Đã đồng bộ ${updated} video từ TikTok.`;
-    return { ok: updated > 0 || !errors.length, message, logs: listUploadLogs(), updated };
+      ? `Đã cập nhật ${updated}/${candidates.length} video. ${errors.length} video chưa đọc được số liệu.${remaining ? ` Còn ${remaining} video đến hạn cho lượt sau.` : ''}`
+      : candidates.length
+        ? `Đã đồng bộ ${updated} video từ TikTok.${remaining ? ` Còn ${remaining} video đến hạn cho lượt sau.` : ''}`
+        : 'Chưa có video nào đến hạn đồng bộ; follower tài khoản vẫn đã được kiểm tra.';
+    return { ok: updated > 0 || !errors.length, message, logs: listUploadLogs(), updated, eligible: due.length, remaining };
   } catch (error) {
     const message = cleanBrowserError(error instanceof Error ? error.message : String(error));
-    return { ok: false, message, logs: listUploadLogs(), updated };
+    return { ok: false, message, logs: listUploadLogs(), updated, eligible: due.length, remaining: Math.max(0, due.length - candidates.length) };
   } finally {
     await context?.close().catch(() => undefined);
   }
 }
 
-async function syncFollowerGrowth(page: Page) {
-  const profileHref = await page.locator('a[href^="/@"]').first().getAttribute('href').catch(() => null);
-  if (!profileHref) return;
-  await page.goto(new URL(profileHref, 'https://www.tiktok.com').toString(), { waitUntil: 'domcontentloaded', timeout: 60_000 });
+async function syncFollowerGrowth(page: Page, videoUrl: string) {
+  const username = getTikTokUsername(videoUrl);
+  if (!username) return;
+  await page.goto(`https://www.tiktok.com/@${encodeURIComponent(username)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForTimeout(1500);
+  if (getTikTokUsername(page.url())?.toLowerCase() !== username.toLowerCase()) return;
   const followers = parseCompactMetric(await page.locator('[data-e2e="followers-count"]').first().textContent().catch(() => ''));
   if (followers === undefined) return;
 
@@ -85,6 +96,29 @@ async function syncFollowerGrowth(page: Page) {
   setSetting('tiktok.followers_current', String(followers));
 }
 
+function getTikTokUsername(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)tiktok\.com$/i.test(parsed.hostname)) return undefined;
+    const match = parsed.pathname.match(/^\/@([^/]+)/);
+    return match ? decodeURIComponent(match[1]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isDueForSync(log: ReturnType<typeof listUploadLogs>[number]) {
+  const uploadedAt = new Date(log.uploadedAt).getTime();
+  if (!Number.isFinite(uploadedAt)) return false;
+  const age = Date.now() - uploadedAt;
+  if (age > 30 * dayMs) return false;
+  if (!log.lastSyncedAt) return true;
+  const lastSyncedAt = new Date(log.lastSyncedAt).getTime();
+  if (!Number.isFinite(lastSyncedAt)) return true;
+  const interval = age <= 2 * dayMs ? 30 * minuteMs : age <= 7 * dayMs ? 12 * 60 * minuteMs : 3 * dayMs;
+  return Date.now() - lastSyncedAt >= interval;
+}
+
 export async function publishGeneratedVideoToTikTok(filePath: string, caption: string): Promise<TikTokPublishResult> {
   const resolved = assertGeneratedVideoPath(filePath);
   const item = listGeneratedVideos().find((video) => video.filePath === resolved);
@@ -94,7 +128,7 @@ export async function publishGeneratedVideoToTikTok(filePath: string, caption: s
   if (item.publishStatus === 'published') throw new Error('This video has already been published.');
   if (!fs.existsSync(resolved)) throw new Error('The final MP4 no longer exists.');
 
-  const normalizedCaption = ensureTikTokHashtags(caption);
+  const normalizedCaption = normalizeTikTokCaption(caption);
   setGeneratedVideoPublishState(resolved, { status: 'publishing', caption: normalizedCaption });
   const automationProfileDirectory = findChromeProfileDirectory(automationProfileEmail);
   let context: BrowserContext | undefined;

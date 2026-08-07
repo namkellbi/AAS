@@ -42,6 +42,7 @@ const api: DesktopAPI = {
   testGemini: () => ipcRenderer.invoke('gemini:test'),
   getLocalTtsStatus: () => ipcRenderer.invoke('tts:local-status'),
   previewTts: (request) => ipcRenderer.invoke('tts:preview', request),
+  normalizeSpeech: (texts, relatedPostId) => ipcRenderer.invoke('tts:normalize', texts, relatedPostId),
   openOpenAiBilling: () => ipcRenderer.invoke('shell:open-openai-billing'),
   openGeminiApiKeys: () => ipcRenderer.invoke('shell:open-gemini-api-keys'),
   getThreadsLoginStatus: () => ipcRenderer.invoke('threads:login-status'),

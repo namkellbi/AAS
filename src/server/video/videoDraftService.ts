@@ -22,6 +22,9 @@ type RenderVideoDraftRequest = {
   selectedReplies?: SelectedReply[];
   hookText?: string;
   postReadVersion?: string;
+  postTtsText?: string;
+  replyTtsTexts?: string[];
+  speechTextsFinalized?: boolean;
   transitionLine?: string;
   solutionText?: string;
   ctaText?: string;
@@ -40,8 +43,11 @@ type Scene = {
 
 type TextSceneStyle = 'card' | 'native-hook' | 'none';
 
-const backgroundMusicPath = () => path.resolve(process.cwd(), 'data', 'background-music', 'cute.mp3');
-const backgroundMusicVolume = 0.10;
+// Normalize different source tracks, then keep music roughly 13 dB below
+// narration. The previous 0.10 gain put typical tracks near -41 dB and made
+// them effectively inaudible once mixed with voiceover.
+const backgroundMusicVolume = 0.22;
+const audioExtensions = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac']);
 
 // D4 — template rotation: vary card palette and hook style between renders
 // so consecutive videos do not look machine-stamped. State persists in app_settings.
@@ -91,6 +97,14 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     throw new Error(`${ttsProvider === 'gemini' ? 'Gemini' : 'OpenAI'} API key is missing. Add it in Settings before generating a video voiceover.`);
   }
   if (!request.backgroundPath || !fs.existsSync(request.backgroundPath)) throw new Error('Background clip is missing. Select a valid clip from Asset Library before rendering.');
+  const selectedBackgroundPath = request.backgroundPath;
+  const backgroundDuration = await probeDuration(selectedBackgroundPath);
+  const selectedMusicPath = pickRandomResource(
+    path.resolve(process.cwd(), 'data', 'background-music'),
+    audioExtensions,
+    'video.last_background_music'
+  );
+  if (!selectedMusicPath) throw new Error('Không tìm thấy file nhạc nền hợp lệ trong data/background-music.');
   const useOriginalPostReadOnly = !getCreativeAiEnabled();
   const karaokeEnabled = getKaraokeCaptionsEnabled();
   if (karaokeEnabled && !openAiApiKey) throw new Error('OpenAI API key is required for Whisper karaoke timestamps. Add the key or turn off Karaoke caption.');
@@ -100,14 +114,21 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   const workDir = path.join(exportDir, '_work');
   const thumbDir = path.join(workDir, 'thumbnails');
   fs.mkdirSync(thumbDir, { recursive: true });
-  fs.writeFileSync(path.join(workDir, 'export-info.json'), JSON.stringify({ postId: request.post.id, createdAt: new Date().toISOString() }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(workDir, 'export-info.json'), JSON.stringify({
+    postId: request.post.id,
+    createdAt: new Date().toISOString(),
+    backgroundVideo: selectedBackgroundPath,
+    backgroundMusic: selectedMusicPath
+  }, null, 2), 'utf8');
   const outputPath = path.join(exportDir, `${exportName}.mp4`);
   const voice = getDefaultVoice();
   const speed = getDefaultSpeed();
   const hookText = useOriginalPostReadOnly ? '' : request.hookText?.trim() || request.analysis.hooks[0]?.trim() || '';
   const postText = useOriginalPostReadOnly ? request.post.content : request.postReadVersion?.trim() || request.analysis.videoScript.postReadVersion.trim() || request.post.content;
+  const postTtsText = request.postTtsText?.trim() || postText;
   let replies = (request.selectedReplies ?? request.analysis.bestReplies).filter((reply) => reply.content.trim()).slice(0, 10);
-  if (replies.some((reply) => !reply.authorAvatarUrl) && request.post.url) {
+  const replyTtsTexts = replies.map((reply, index) => request.replyTtsTexts?.[index]?.trim() || reply.content);
+  if (replies.some((reply) => !reply.authorAvatarUrl || !reply.mediaUrls) && request.post.url) {
     onProgress({ percent: 7, message: 'Đang bổ sung avatar và reaction cho replies...' });
     const refreshed = await scrapeThreadsPostReplies(request.post.url).catch(() => []);
     replies = replies.map((reply) => {
@@ -117,6 +138,7 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
         ...reply,
         author: source.author,
         authorAvatarUrl: source.authorAvatarUrl,
+        mediaUrls: source.mediaUrls,
         likes: source.likes,
         replies: source.replies,
         reposts: source.reposts,
@@ -132,21 +154,39 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   activePostId = request.post.id;
   pickTemplateRotation();
   const ttsFor = (kind: TtsSegmentKind) => getTtsInstruction(kind);
-  const speechSources = [hookText, postText, ...replies.map((reply) => reply.content), transitionLine, solutionText, ctaText].filter(Boolean);
+  const speechEntries = [
+    { source: hookText, manuallyEdited: false },
+    { source: postTtsText, manuallyEdited: Boolean(request.speechTextsFinalized) || postTtsText.trim() !== postText.trim() },
+    ...replyTtsTexts.map((source, index) => ({ source, manuallyEdited: Boolean(request.speechTextsFinalized) || source.trim() !== replies[index].content.trim() })),
+    { source: transitionLine, manuallyEdited: false },
+    { source: solutionText, manuallyEdited: false },
+    { source: ctaText, manuallyEdited: false }
+  ].filter((entry) => Boolean(entry.source));
+  const speechSources = speechEntries.map((entry) => entry.source);
   onProgress({ percent: 12, message: 'Đang chuẩn hóa tiếng lóng và cách đọc tiếng Việt...' });
-  const normalizedSpeech = await normalizeVietnameseSpeechBatch(
-    speechSources,
+  // Text entered in a dedicated TTS field is an explicit pronunciation
+  // instruction. Do not let contextual AI reinterpret it (for example,
+  // changing "Bộ Giáo dục" back into another expansion of "bgd").
+  const normalizedSpeech = speechEntries.map((entry) => entry.manuallyEdited ? entry.source : normalizeVietnameseForSpeech(entry.source));
+  const automaticEntries = speechEntries
+    .map((entry, index) => ({ ...entry, index }))
+    .filter((entry) => !entry.manuallyEdited);
+  const automaticSpeech = await normalizeVietnameseSpeechBatch(
+    automaticEntries.map((entry) => entry.source),
     openAiApiKey,
     request.post.id
   );
+  automaticEntries.forEach((entry, index) => {
+    normalizedSpeech[entry.index] = automaticSpeech[index];
+  });
   const speechBySource = new Map(speechSources.map((source, index) => [source, normalizedSpeech[index]]));
   const spokenText = (source: string) => speechBySource.get(source) ?? normalizeVietnameseForSpeech(source);
 
   onProgress({ percent: 16, message: `Đang tạo voiceover · ${voice} · tốc độ ${speed.toFixed(2)}x...` });
   const hookScene = hookText ? await createTextScene(workDir, 'hook', hookText, apiKey, voice, speed, 2, ttsFor('hook'), karaokeEnabled ? 'native-hook' : 'card', spokenText(hookText)) : null;
-  const postScene = await createSpokenScene(workDir, 'post', postText, request.post, undefined, apiKey, voice, speed, ttsFor('post'), spokenText(postText));
+  const postScene = await createSpokenScene(workDir, 'post', postText, request.post, undefined, apiKey, voice, speed, ttsFor('post'), spokenText(postTtsText));
   const replyScenes = await Promise.all(
-    replies.map((reply, index) => createSpokenScene(workDir, `reply-${index + 1}`, reply.content, request.post, reply, apiKey, voice, speed, ttsFor('reply'), spokenText(reply.content)))
+    replies.map((reply, index) => createSpokenScene(workDir, `reply-${index + 1}`, reply.content, request.post, reply, apiKey, voice, speed, ttsFor('reply'), spokenText(replyTtsTexts[index])))
   );
   const transitionScene = transitionLine ? await createTextScene(workDir, 'transition', transitionLine, apiKey, voice, speed, 2, ttsFor('transition'), karaokeEnabled ? 'none' : 'card', spokenText(transitionLine)) : null;
   const solutionScene = solutionText ? await createTextScene(workDir, 'solution', solutionText, apiKey, voice, speed, 4, ttsFor('solution'), karaokeEnabled ? 'none' : 'card', spokenText(solutionText)) : null;
@@ -165,9 +205,12 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     }
   }
   onProgress({ percent: 48, message: 'Đang render từng segment độc lập...' });
+  let backgroundOffsetSecs = 0;
   for (let index = 0; index < scenes.length; index += 1) {
     const isPostBeforeReplies = scenes[index] === postScene && replyScenes.length > 0;
-    await renderOverlayScene(request.backgroundPath, scenes[index], isPostBeforeReplies ? Math.max(silenceSecs, 0.3) : silenceSecs);
+    const sceneSilenceSecs = isPostBeforeReplies ? Math.max(silenceSecs, 0.3) : silenceSecs;
+    await renderOverlayScene(selectedBackgroundPath, scenes[index], sceneSilenceSecs, backgroundOffsetSecs, backgroundDuration);
+    backgroundOffsetSecs += scenes[index].duration + sceneSilenceSecs;
     onProgress({ percent: 48 + Math.round(((index + 1) / Math.max(scenes.length, 1)) * 28), message: `Đã render ${index + 1}/${scenes.length} segment...` });
   }
 
@@ -179,16 +222,17 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     const productOutput = path.join(workDir, 'segment-product.mp4');
     await renderSilentOverlayScene(request.demoPath, productOverlay, productOutput, productDuration + silenceSecs);
     segmentPaths.push(productOutput);
+    backgroundOffsetSecs += productDuration + silenceSecs;
   }
 
   if (outroScene) {
-    await renderOverlayScene(request.backgroundPath, outroScene, silenceSecs);
+    await renderOverlayScene(selectedBackgroundPath, outroScene, silenceSecs, backgroundOffsetSecs, backgroundDuration);
     segmentPaths.push(outroScene.outputPath);
   }
   onProgress({ percent: 82, message: 'Đang ghép video hoàn chỉnh...' });
   await concatVideoSegments(segmentPaths, outputPath);
   onProgress({ percent: 87, message: 'Đang lồng nhạc nền...' });
-  await mixBackgroundMusic(outputPath);
+  await mixBackgroundMusic(outputPath, selectedMusicPath);
 
   onProgress({ percent: 90, message: 'Đang tạo metadata, checklist và thumbnail...' });
   await writeMetadata(workDir, request.analysis, ctaText, request.product, { provider: ttsProvider, voice, speed }, path.basename(outputPath));
@@ -219,12 +263,15 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
         variantOutro.assPath = assPath;
       }
     }
-    if (variantHook) await renderOverlayScene(request.backgroundPath, variantHook, silenceSecs);
-    await renderOverlayScene(request.backgroundPath, variantOutro, silenceSecs);
+    if (variantHook) await renderOverlayScene(selectedBackgroundPath, variantHook, silenceSecs, 0, backgroundDuration);
+    const originalHookSpan = hookScene ? hookScene.duration + silenceSecs : 0;
+    const variantHookSpan = variantHook ? variantHook.duration + silenceSecs : 0;
+    const variantOutroOffset = Math.max(0, backgroundOffsetSecs - originalHookSpan + variantHookSpan);
+    await renderOverlayScene(selectedBackgroundPath, variantOutro, silenceSecs, variantOutroOffset, backgroundDuration);
 
     const variantOutput = path.join(exportDir, `${exportName}-variant-${index + 1}.mp4`);
     await concatVideoSegments([...(variantHook ? [variantHook.outputPath] : []), ...middleSegments, variantOutro.outputPath], variantOutput);
-    await mixBackgroundMusic(variantOutput);
+    await mixBackgroundMusic(variantOutput, selectedMusicPath);
     await writeMetadata(variantDir, request.analysis, variantCtaText, request.product, { provider: ttsProvider, voice, speed }, path.basename(variantOutput));
     fs.writeFileSync(
       path.join(variantDir, 'variant-info.json'),
@@ -296,7 +343,7 @@ async function renderReplyCard(reply: SelectedReply, outputPath: string) {
     replies: reply.replies,
     reposts: reply.reposts,
     shares: reply.shares
-  }, true, reply.authorAvatarUrl));
+  }, true, reply.authorAvatarUrl, reply.mediaUrls?.[0]));
 }
 
 async function renderNativeHookImage(outputPath: string, text: string) {
@@ -362,13 +409,14 @@ type CardReactions = {
   shares?: number;
 };
 
-function cardHtml(author: string, meta: string, content: string, reactions: CardReactions, compact = false, avatarUrl?: string) {
+function cardHtml(author: string, meta: string, content: string, reactions: CardReactions, compact = false, avatarUrl?: string, mediaUrl?: string) {
   const avatarLetter = author.replace(/^@/, '').slice(0, 1).toUpperCase() || '@';
   const avatarImage = avatarUrl
     ? `<img class="avatar-image" src="${escapeHtml(avatarUrl)}" alt="" referrerpolicy="no-referrer" onerror="this.style.display='none'" />`
     : '';
   const metaHtml = meta ? `<div class="meta">${escapeHtml(meta)}</div>` : '';
-  return `<!doctype html><html><head><meta charset="UTF-8" /><style>*{box-sizing:border-box}body{margin:0;padding:20px;background:transparent;font-family:Arial,sans-serif;color:#111827}.card{width:${compact ? 790 : 860}px;border-radius:16px;background:#fff;padding:${compact ? 20 : 27}px;box-shadow:0 14px 44px rgba(0,0,0,.24)}.head{display:flex;gap:13px;align-items:center}.avatar{position:relative;display:grid;width:44px;height:44px;flex:0 0 44px;overflow:hidden;place-items:center;border-radius:50%;background:#dbeafe;font-size:18px;font-weight:700}.avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.author{font-size:22px;font-weight:700}.meta{color:#6b7280;font-size:16px}.content{margin-top:18px;white-space:pre-wrap;font-size:${compact ? 25 : 28}px;line-height:1.42}.reactions{display:flex;align-items:center;gap:28px;margin-top:20px;color:#4b5563}.reaction{display:flex;align-items:center;gap:7px;min-width:36px;font-size:16px}.reaction svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}</style></head><body><section class="card"><div class="head"><div class="avatar"><span>${escapeHtml(avatarLetter)}</span>${avatarImage}</div><div><div class="author">${escapeHtml(author)}</div>${metaHtml}</div></div><div class="content">${escapeHtml(content)}</div>${reactionHtml(reactions)}</section></body></html>`;
+  const mediaHtml = mediaUrl ? `<img class="reply-media" src="${escapeHtml(mediaUrl)}" alt="" referrerpolicy="no-referrer" />` : '';
+  return `<!doctype html><html><head><meta charset="UTF-8" /><style>*{box-sizing:border-box}body{margin:0;padding:20px;background:transparent;font-family:Arial,sans-serif;color:#111827}.card{width:${compact ? 790 : 860}px;border-radius:16px;background:#fff;padding:${compact ? 20 : 27}px;box-shadow:0 14px 44px rgba(0,0,0,.24)}.head{display:flex;gap:13px;align-items:center}.avatar{position:relative;display:grid;width:44px;height:44px;flex:0 0 44px;overflow:hidden;place-items:center;border-radius:50%;background:#dbeafe;font-size:18px;font-weight:700}.avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.author{font-size:22px;font-weight:700}.meta{color:#6b7280;font-size:16px}.content{margin-top:18px;white-space:pre-wrap;font-size:${compact ? 25 : 28}px;line-height:1.42}.reply-media{display:block;width:100%;max-height:540px;margin-top:16px;border-radius:13px;background:#111827;object-fit:contain}.reactions{display:flex;align-items:center;gap:28px;margin-top:20px;color:#4b5563}.reaction{display:flex;align-items:center;gap:7px;min-width:36px;font-size:16px}.reaction svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}</style></head><body><section class="card"><div class="head"><div class="avatar"><span>${escapeHtml(avatarLetter)}</span>${avatarImage}</div><div><div class="author">${escapeHtml(author)}</div>${metaHtml}</div></div><div class="content">${escapeHtml(content)}</div>${mediaHtml}${reactionHtml(reactions)}</section></body></html>`;
 }
 
 function reactionHtml(reactions: CardReactions) {
@@ -398,8 +446,11 @@ function formatCompactMetric(value: number) {
   return `${compact >= 10 ? Math.round(compact) : compact.toFixed(1).replace(/\.0$/, '')}${unit.suffix}`;
 }
 
-async function renderOverlayScene(backgroundPath: string, scene: Scene, silenceSecs = 0) {
-  const args = ['-y', '-stream_loop', '-1', '-i', backgroundPath];
+async function renderOverlayScene(backgroundPath: string, scene: Scene, silenceSecs = 0, startOffsetSecs = 0, backgroundDuration = 0) {
+  const normalizedOffset = backgroundDuration > 0 ? startOffsetSecs % backgroundDuration : startOffsetSecs;
+  const args = ['-y', '-stream_loop', '-1'];
+  if (normalizedOffset > 0.001) args.push('-ss', normalizedOffset.toFixed(3));
+  args.push('-i', backgroundPath);
   if (scene.imagePath) args.push('-loop', '1', '-i', scene.imagePath);
   args.push('-i', scene.audioPath);
   const audioIndex = scene.imagePath ? 2 : 1;
@@ -443,19 +494,14 @@ async function concatVideoSegments(paths: string[], outputPath: string) {
   await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concatPath, '-c', 'copy', '-movflags', '+faststart', outputPath]);
 }
 
-async function mixBackgroundMusic(videoPath: string) {
-  const musicPath = backgroundMusicPath();
-  if (!fs.existsSync(musicPath)) {
-    throw new Error(`Background music is missing: ${musicPath}`);
-  }
-
+async function mixBackgroundMusic(videoPath: string, musicPath: string) {
   const mixedPath = path.join(
     path.dirname(videoPath),
     `.${path.basename(videoPath, path.extname(videoPath))}.with-music-${crypto.randomUUID()}.mp4`
   );
   const filter = [
     '[0:a]aresample=async=1:first_pts=0[voice]',
-    `[1:a]volume=${backgroundMusicVolume},aresample=async=1:first_pts=0[music]`,
+    `[1:a]loudnorm=I=-20:TP=-2:LRA=11,volume=${backgroundMusicVolume},aresample=async=1:first_pts=0[music]`,
     '[voice][music]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[audio]'
   ].join(';');
 
@@ -480,6 +526,19 @@ async function mixBackgroundMusic(videoPath: string) {
   } finally {
     if (fs.existsSync(mixedPath)) fs.unlinkSync(mixedPath);
   }
+}
+
+function pickRandomResource(directory: string, extensions: Set<string>, settingKey: string) {
+  if (!fs.existsSync(directory)) return undefined;
+  const files = fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && extensions.has(path.extname(entry.name).toLowerCase()))
+    .map((entry) => path.join(directory, entry.name));
+  if (!files.length) return undefined;
+  const last = getSetting(settingKey);
+  const pool = files.length > 1 ? files.filter((file) => file !== last) : files;
+  const selected = pool[Math.floor(Math.random() * pool.length)] ?? files[0];
+  setSetting(settingKey, selected);
+  return selected;
 }
 
 async function writeMetadata(exportDir: string, analysis: AIAnalysis, ctaText: string, product: Product | undefined, tts: { provider: TtsProvider; voice: TtsVoice; speed: number }, finalFileName: string) {
