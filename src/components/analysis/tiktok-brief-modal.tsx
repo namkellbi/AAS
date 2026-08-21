@@ -2,11 +2,12 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { ArrowDown, ArrowUp, CheckCircle2, ClipboardCopy, ClipboardPaste, Clock3, ExternalLink, FolderOpen, Lightbulb, Play, RotateCcw, ShoppingBag, Target, Trash2, Video, X } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { CheckCircle2, ClipboardCopy, ClipboardPaste, Clock3, ExternalLink, FolderOpen, Lightbulb, Move, Music, Play, RotateCcw, ShoppingBag, Target, Trash2, Video, VolumeX, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { TranslationCopy } from '@/lib/i18n';
+import { filterUsefulReplies } from '@/lib/replies';
 import type { AIAnalysis, AssetLibraryItem, Product, ThreadsPost, TtsProvider, TtsVoice, VideoDraftRequest, VideoDraftVariant } from '@/lib/types';
 
 export function TikTokBriefModal({
@@ -64,6 +65,7 @@ export function TikTokBriefModal({
   const [solutionText, setSolutionText] = useState(useOriginalPostReadOnly ? '' : analysis.videoScript.solutionText || analysis.solutionScript);
   const [ctaText, setCtaText] = useState(useOriginalPostReadOnly ? '' : analysis.videoScript.ctaText || analysis.ctas[0] || '');
   const [backgroundPath, setBackgroundPath] = useState(() => initialBackgroundPath ?? pickRandomBackgroundAsset(assets));
+  const [backgroundMusicEnabled, setBackgroundMusicEnabled] = useState(true);
   const selectedBackgroundAsset = assets.find((asset) => asset.type === 'background' && asset.filePath === backgroundPath);
   const matchedDemoPath = matchedProduct?.demoAssetId ? assets.find((asset) => asset.id === matchedProduct.demoAssetId)?.filePath ?? '' : '';
   const [productClipPath, setProductClipPath] = useState(matchedDemoPath);
@@ -71,6 +73,11 @@ export function TikTokBriefModal({
   const [normalizingSpeech, setNormalizingSpeech] = useState(false);
   const [speechNormalizationError, setSpeechNormalizationError] = useState('');
   const [deletedReply, setDeletedReply] = useState<{ reply: ReturnType<typeof topLikedReplies>[number]; index: number } | null>(null);
+  const [draggedReplyIndex, setDraggedReplyIndex] = useState<number | null>(null);
+  const [dragOverReplyIndex, setDragOverReplyIndex] = useState<number | null>(null);
+  const scrollContainerRef = useRef<HTMLElement>(null);
+  const dragScrollSpeedRef = useRef(0);
+  const dragScrollFrameRef = useRef<number | null>(null);
   const [clipboardMessage, setClipboardMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [importBackup, setImportBackup] = useState<{ postText: string; replyTexts: Record<string, string> } | null>(null);
   useEffect(() => {
@@ -84,6 +91,7 @@ export function TikTokBriefModal({
     setSolutionText(useOriginalPostReadOnly ? '' : analysis.videoScript.solutionText || analysis.solutionScript);
     setCtaText(useOriginalPostReadOnly ? '' : analysis.videoScript.ctaText || analysis.ctas[0] || '');
     setDeletedReply(null);
+    setBackgroundMusicEnabled(true);
     setClipboardMessage(null);
     setImportBackup(null);
   // Reset the draft only when the user opens a different post or changes the
@@ -98,7 +106,8 @@ export function TikTokBriefModal({
   // but do not overwrite a manual selection during ordinary parent re-renders.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id]);
-  const renderRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, postTtsText, replyTtsTexts: replies.map((reply) => replyTtsTexts[replyKey(reply)] || reply.content), speechTextsFinalized: true, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, productClipPath, variants: variants.length ? variants : undefined };
+  useEffect(() => () => stopDragAutoScroll(), []);
+  const renderRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, postTtsText, replyTtsTexts: replies.map((reply) => replyTtsTexts[replyKey(reply)] || reply.content), speechTextsFinalized: true, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, backgroundMusicEnabled, productClipPath, variants: variants.length ? variants : undefined };
   const estimatedDuration = estimateVideoDuration([
     hookText,
     postTtsText,
@@ -191,12 +200,80 @@ export function TikTokBriefModal({
     setReplies(next);
     setDeletedReply(null);
   }
+
+  function dropReplyAt(targetIndex: number) {
+    if (draggedReplyIndex !== null && draggedReplyIndex !== targetIndex) {
+      setReplies((current) => moveItem(current, draggedReplyIndex, targetIndex));
+    }
+    setDraggedReplyIndex(null);
+    setDragOverReplyIndex(null);
+    stopDragAutoScroll();
+  }
+
+  function stopDragAutoScroll() {
+    dragScrollSpeedRef.current = 0;
+    if (dragScrollFrameRef.current !== null) {
+      cancelAnimationFrame(dragScrollFrameRef.current);
+      dragScrollFrameRef.current = null;
+    }
+  }
+
+  function updateDragAutoScroll(clientY: number) {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const { top, bottom } = container.getBoundingClientRect();
+    const edgeSize = Math.min(120, (bottom - top) * 0.2);
+    const topDistance = clientY - top;
+    const bottomDistance = bottom - clientY;
+
+    dragScrollSpeedRef.current = topDistance < edgeSize
+      ? -Math.ceil(4 + 18 * (1 - Math.max(0, topDistance) / edgeSize))
+      : bottomDistance < edgeSize
+        ? Math.ceil(4 + 18 * (1 - Math.max(0, bottomDistance) / edgeSize))
+        : 0;
+
+    if (dragScrollSpeedRef.current === 0 || dragScrollFrameRef.current !== null) return;
+    const scroll = () => {
+      const currentContainer = scrollContainerRef.current;
+      const speed = dragScrollSpeedRef.current;
+      if (!currentContainer || speed === 0) {
+        dragScrollFrameRef.current = null;
+        return;
+      }
+      currentContainer.scrollTop += speed;
+      dragScrollFrameRef.current = requestAnimationFrame(scroll);
+    };
+    dragScrollFrameRef.current = requestAnimationFrame(scroll);
+  }
+
+  function addMoreReplies() {
+    const selectedKeys = new Set(replies.map(replyKey));
+    const additional = rankedReplies(post)
+      .filter((reply) => !selectedKeys.has(replyKey(reply)))
+      .slice(0, 5);
+    if (!additional.length) return;
+    setReplies((current) => [...current, ...additional]);
+    setReplyTtsTexts((current) => ({
+      ...current,
+      ...Object.fromEntries(additional.map((reply) => [replyKey(reply), reply.content]))
+    }));
+  }
+
+  const remainingReplyCount = rankedReplies(post).filter(
+    (candidate) => !replies.some((reply) => replyKey(reply) === replyKey(candidate))
+  ).length;
+
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-5" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-5">
       <section
+        ref={scrollContainerRef}
         aria-label={copy.tiktokBrief}
         className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border border-border bg-[#0c0f13] shadow-2xl"
-        onMouseDown={(event) => event.stopPropagation()}
+        onDragOver={(event) => {
+          if (draggedReplyIndex === null) return;
+          event.preventDefault();
+          updateDragAutoScroll(event.clientY);
+        }}
       >
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-[#0c0f13]/95 px-5 py-4 backdrop-blur">
           <div>
@@ -323,41 +400,74 @@ export function TikTokBriefModal({
                   <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-300">Bài viết</div>
                   {postTtsText.trim() !== postText.trim() ? <Button className="h-8 px-2 text-xs opacity-70 transition group-hover:opacity-100" onClick={() => setPostTtsText(postText)}>Khôi phục</Button> : null}
                 </div>
-                <div
-                  role="textbox"
-                  aria-label="Nội dung đọc của bài viết"
-                  aria-multiline="true"
-                  contentEditable
-                  suppressContentEditableWarning
+                <EditableText
+                  ariaLabel="Nội dung đọc của bài viết"
                   className="min-h-20 whitespace-pre-wrap text-sm leading-6 text-text outline-none"
-                  onInput={(event) => setPostTtsText(event.currentTarget.innerText.replace(/\r\n/g, '\n'))}
-                >{postTtsText}</div>
+                  value={postTtsText}
+                  onChange={setPostTtsText}
+                />
               </section>
               {replies.map((reply, index) => (
-                <section key={replyKey(reply)} className="group border-t border-border px-4 py-3 focus-within:bg-white/[0.02] hover:bg-white/[0.02]">
+                <section
+                  key={replyKey(reply)}
+                  className={`group border-t px-4 py-3 transition-colors focus-within:bg-white/[0.02] hover:bg-white/[0.02] ${dragOverReplyIndex === index ? 'border-accent bg-accent/10' : 'border-border'}`}
+                  onDragOver={(event) => {
+                    if (draggedReplyIndex === null) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    setDragOverReplyIndex(index);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    dropReplyAt(index);
+                  }}
+                >
                   <div className="mb-2 flex min-h-8 items-center gap-2">
                     <div className="min-w-0 flex-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
                       Reply {index + 1} <span className="normal-case tracking-normal">· {(reply.likes ?? 0).toLocaleString('vi-VN')} likes{reply.author ? ` · ${reply.author}` : ''}</span>
                     </div>
                     <div className="flex shrink-0 items-center gap-1 opacity-60 transition group-hover:opacity-100 group-focus-within:opacity-100">
                       {(replyTtsTexts[replyKey(reply)] || reply.content).trim() !== reply.content.trim() ? <button className="px-1 text-[11px] text-sky-300 hover:text-sky-200" onClick={() => setReplyTtsTexts((current) => ({ ...current, [replyKey(reply)]: reply.content }))}>Khôi phục</button> : null}
-                      <Button aria-label={`Đưa reply ${index + 1} lên`} title="Đưa lên" className="h-8 px-2" icon={<ArrowUp className="size-3" />} disabled={index === 0} onClick={() => setReplies(moveItem(replies, index, index - 1))} />
-                      <Button aria-label={`Đưa reply ${index + 1} xuống`} title="Đưa xuống" className="h-8 px-2" icon={<ArrowDown className="size-3" />} disabled={index === replies.length - 1} onClick={() => setReplies(moveItem(replies, index, index + 1))} />
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        draggable
+                        aria-label={`Kéo để đổi vị trí reply ${index + 1}`}
+                        title="Kéo để đổi vị trí"
+                        className="grid h-8 cursor-grab place-items-center rounded-md border border-border bg-panelSoft px-2 text-muted active:cursor-grabbing"
+                        onDragStart={(event) => {
+                          setDraggedReplyIndex(index);
+                          setDragOverReplyIndex(index);
+                          event.dataTransfer.effectAllowed = 'move';
+                          event.dataTransfer.setData('text/plain', replyKey(reply));
+                        }}
+                        onDragEnd={() => {
+                          setDraggedReplyIndex(null);
+                          setDragOverReplyIndex(null);
+                          stopDragAutoScroll();
+                        }}
+                      >
+                        <Move className="size-4" />
+                      </div>
                       <Button aria-label={`Xóa reply ${index + 1}`} title="Xóa reply" className="h-8 px-2 text-rose-300 hover:text-rose-200" icon={<Trash2 className="size-3" />} onClick={() => deleteReply(index)} />
                     </div>
                   </div>
-                  <div
-                    role="textbox"
-                    aria-label={`Nội dung đọc của reply ${index + 1}`}
-                    aria-multiline="true"
-                    contentEditable
-                    suppressContentEditableWarning
+                  <EditableText
+                    ariaLabel={`Nội dung đọc của reply ${index + 1}`}
                     className="min-h-12 whitespace-pre-wrap text-sm leading-6 text-text outline-none"
-                    onInput={(event) => setReplyTtsTexts((current) => ({ ...current, [replyKey(reply)]: event.currentTarget.innerText.replace(/\r\n/g, '\n') }))}
-                  >{replyTtsTexts[replyKey(reply)] ?? reply.content}</div>
+                    value={replyTtsTexts[replyKey(reply)] ?? reply.content}
+                    onChange={(nextText) => setReplyTtsTexts((current) => ({ ...current, [replyKey(reply)]: nextText }))}
+                  />
                 </section>
               ))}
             </div>
+            {remainingReplyCount > 0 ? (
+              <div className="mt-3 flex justify-center">
+                <Button onClick={addMoreReplies}>
+                  Thêm {Math.min(5, remainingReplyCount)} reply ({remainingReplyCount} còn lại)
+                </Button>
+              </div>
+            ) : null}
             {deletedReply ? (
               <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-100">
                 <span className="min-w-0 truncate">Đã xóa: {deletedReply.reply.content}</span>
@@ -371,6 +481,23 @@ export function TikTokBriefModal({
             {!useOriginalPostReadOnly ? <label className="mt-3 grid gap-2 text-xs text-muted">Solution - lời giới thiệu sản phẩm tự nhiên<textarea className="min-h-28 rounded-md border border-border bg-background p-3 text-sm text-text" value={solutionText} onChange={(event) => setSolutionText(event.target.value)} /></label> : null}
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <label className={`grid gap-2 text-xs text-muted ${useOriginalPostReadOnly ? 'md:col-span-2' : ''}`}>Background clip<select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={backgroundPath} onChange={(event) => setBackgroundPath(event.target.value)}><option value="">Chọn khi render</option>{assets.filter((asset) => asset.type === 'background').map((asset) => <option key={asset.id} value={asset.filePath}>{asset.label}</option>)}</select></label>
+              <button
+                type="button"
+                aria-pressed={backgroundMusicEnabled}
+                className={`flex min-h-10 items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-sm transition md:col-span-2 ${backgroundMusicEnabled ? 'border-accent/40 bg-accent/10 text-text hover:bg-accent/15' : 'border-border bg-background text-muted hover:border-slate-500 hover:text-text'}`}
+                onClick={() => setBackgroundMusicEnabled((enabled) => !enabled)}
+              >
+                <span className="flex items-center gap-2">
+                  {backgroundMusicEnabled ? <Music className="size-4 text-accent" /> : <VolumeX className="size-4 text-muted" />}
+                  <span>
+                    <span className="block font-medium">Nhạc nền</span>
+                    <span className="block text-xs font-normal text-muted">{backgroundMusicEnabled ? 'Có trộn nhạc nền vào video' : 'Chỉ giữ voiceover, không trộn nhạc nền'}</span>
+                  </span>
+                </span>
+                <span className={`rounded-md px-2.5 py-1 text-xs font-semibold ${backgroundMusicEnabled ? 'bg-accent text-slate-950' : 'bg-panelSoft text-slate-300'}`}>
+                  {backgroundMusicEnabled ? 'Đang bật' : 'Đã tắt'}
+                </span>
+              </button>
               {!useOriginalPostReadOnly ? <label className="grid gap-2 text-xs text-muted">Product clip (optional)<select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text" value={productClipPath} onChange={(event) => setProductClipPath(event.target.value)}><option value="">Không dùng product clip</option>{assets.filter((asset) => asset.type === 'product').map((asset) => <option key={asset.id} value={asset.filePath}>{asset.label}</option>)}</select></label> : null}
             </div>
             {selectedBackgroundAsset ? (
@@ -467,6 +594,45 @@ export function TikTokBriefModal({
   );
 }
 
+function EditableText({
+  ariaLabel,
+  className,
+  value,
+  onChange
+}: {
+  ariaLabel: string;
+  className: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const elementRef = useRef<HTMLDivElement>(null);
+  const lastDomValueRef = useRef<string>();
+
+  useLayoutEffect(() => {
+    const element = elementRef.current;
+    if (!element || value === lastDomValueRef.current) return;
+    element.innerText = value;
+    lastDomValueRef.current = value;
+  }, [value]);
+
+  return (
+    <div
+      ref={elementRef}
+      role="textbox"
+      aria-label={ariaLabel}
+      aria-multiline="true"
+      contentEditable
+      suppressContentEditableWarning
+      className={className}
+      onInput={(event) => {
+        const nextValue = event.currentTarget.innerText.replace(/\r\n/g, '\n');
+        lastDomValueRef.current = nextValue;
+        onChange(nextValue);
+      }}
+    />
+  );
+}
+
 function moveItem<T>(items: T[], from: number, to: number) {
   const next = [...items];
   const [item] = next.splice(from, 1);
@@ -480,10 +646,11 @@ function pickRandomBackgroundAsset(assets: AssetLibraryItem[]) {
 }
 
 function topLikedReplies(post: ThreadsPost) {
-  return [...post.topReplies]
-    .filter((reply) => reply.content.trim())
-    .sort((left, right) => (right.likes ?? 0) - (left.likes ?? 0))
-    .slice(0, 10)
+  return rankedReplies(post).slice(0, 10);
+}
+
+function rankedReplies(post: ThreadsPost) {
+  return filterUsefulReplies(post.topReplies, post)
     .map((reply) => ({
       id: reply.id,
       author: reply.author,

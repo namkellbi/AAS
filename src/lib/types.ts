@@ -9,6 +9,8 @@ export type ThreadsReply = {
   mediaUrls?: string[];
   content: string;
   likes: number;
+  segmentIndex?: number;
+  segmentTotal?: number;
   replies?: number;
   reposts?: number;
   shares?: number;
@@ -351,6 +353,7 @@ export type VideoDraftRequest = {
   solutionText?: string;
   ctaText?: string;
   backgroundPath?: string;
+  backgroundMusicEnabled?: boolean;
   productClipPath?: string;
   variants?: VideoDraftVariant[];
 };
@@ -477,11 +480,16 @@ export type TikTokPublishResult = ServiceHealth & {
   videos: GeneratedVideoItem[];
 };
 
-export type TikTokPerformanceSyncResult = ServiceHealth & {
-  logs: UploadLogEntry[];
-  updated: number;
-  eligible: number;
-  remaining: number;
+export type TikTokUploadPreparationResult = ServiceHealth & {
+  caption: string;
+  videos: GeneratedVideoItem[];
+};
+
+export type ManualPublishRequest = {
+  publishedUrl: string;
+  caption: string;
+  uploadedAt: string;
+  publishMethod?: 'tiktok_studio' | 'mobile';
 };
 
 export type UploadLogEntry = {
@@ -582,8 +590,8 @@ export type DesktopAPI = {
   openGeneratedVideo: (filePath: string) => Promise<ServiceHealth>;
   deleteGeneratedVideo: (filePath: string) => Promise<void>;
   setGeneratedVideoApproved: (filePath: string, approved: boolean) => Promise<GeneratedVideoItem[]>;
-  publishGeneratedVideo: (filePath: string, caption: string) => Promise<TikTokPublishResult>;
-  syncTikTokPerformance: () => Promise<TikTokPerformanceSyncResult>;
+  prepareTikTokUpload: (filePath: string, caption: string) => Promise<TikTokUploadPreparationResult>;
+  markGeneratedVideoPublished: (filePath: string, request: ManualPublishRequest) => Promise<TikTokPublishResult>;
   getUploadLogs: () => Promise<UploadLogEntry[]>;
   saveUploadLog: (entry: UploadLogEntry) => Promise<UploadLogEntry>;
   deleteUploadLog: (id: string) => Promise<void>;

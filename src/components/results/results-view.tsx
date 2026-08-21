@@ -1,6 +1,6 @@
 'use client';
 
-import { Bookmark, Clock3, ExternalLink, Eye, Heart, LoaderCircle, MessageCircle, Pencil, RefreshCcw, Share2, Trash2, TrendingUp, X } from 'lucide-react';
+import { Bookmark, Clock3, ExternalLink, Eye, Heart, MessageCircle, Pencil, Share2, Trash2, TrendingUp, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,7 +8,7 @@ import type { TranslationCopy } from '@/lib/i18n';
 import type { AIAnalysis, Product, ReadinessThresholds, ThreadsPost, UploadLogEntry, UsageSummary } from '@/lib/types';
 import { cn, compactNumber } from '@/lib/utils';
 
-export function ResultsView({ logs, posts, onDelete, onSave, onSync }: {
+export function ResultsView({ logs, posts, onDelete, onSave }: {
   analyses: AIAnalysis[];
   copy: TranslationCopy;
   logs: UploadLogEntry[];
@@ -18,11 +18,9 @@ export function ResultsView({ logs, posts, onDelete, onSave, onSync }: {
   usage: UsageSummary | null;
   onDelete: (id: string) => Promise<void>;
   onSave: (entry: UploadLogEntry) => Promise<void>;
-  onSync: () => Promise<void>;
   onSaveThresholds: (thresholds: Partial<ReadinessThresholds>) => void;
 }) {
   const [editing, setEditing] = useState<UploadLogEntry | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
   const ordered = useMemo(() => [...logs].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)), [logs]);
   const totals = useMemo(() => ordered.reduce((result, log) => ({
@@ -41,21 +39,14 @@ export function ResultsView({ logs, posts, onDelete, onSave, onSync }: {
           <h2 className="text-lg font-semibold text-text">Theo dõi video TikTok</h2>
           <p className="mt-1 text-sm text-muted">Ghi nhận kết quả sau khi đăng để tìm ra khung giờ và kiểu nội dung phù hợp với chính tài khoản này.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <div className="rounded-full border border-border bg-panel px-3 py-1.5 text-xs text-muted">{ordered.length}/15 video trước khi đủ dữ liệu gợi ý</div>
-          <Button
-            variant="primary"
-            icon={syncing ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-            disabled={syncing || !ordered.length}
-            onClick={async () => { setSyncing(true); try { await onSync(); } finally { setSyncing(false); } }}
-          >
-            {syncing ? 'Đang đồng bộ...' : 'Đồng bộ TikTok'}
-          </Button>
+          <div className="rounded-full border border-amber-400/20 bg-amber-400/5 px-3 py-1.5 text-xs text-amber-100">Cập nhật số liệu thủ công · đã tắt browser scraping</div>
         </div>
       </section>
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Video đã đăng" value={String(ordered.length)} helper="Được ghi tự động" />
+        <Metric label="Video đã đăng" value={String(ordered.length)} helper="Ghi nhận sau khi đăng" />
         <Metric label="Tổng lượt xem" value={compactNumber(totals.views)} helper={`Trung bình ${compactNumber(averageViews)}/video`} />
         <Metric label="Tỷ lệ tương tác" value={`${engagementRate.toFixed(1)}%`} helper="Like + comment + lưu + chia sẻ" />
         <Metric label="Follower tài khoản tăng" value={`+${compactNumber(totals.followers)}`} helper="So với lúc bắt đầu theo dõi tài khoản" accent />
@@ -111,7 +102,7 @@ export function ResultsView({ logs, posts, onDelete, onSave, onSync }: {
 
 function VideoRow({ log, post, onDelete, onEdit }: { log: UploadLogEntry; post?: ThreadsPost; onDelete?: () => void; onEdit: () => void }) {
   return (
-    <article className="flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center">
+    <article className="flex flex-col gap-3 px-4 py-3 lg:grid lg:grid-cols-[minmax(0,1fr)_420px_194px] lg:items-center">
       <div className="min-w-0 flex-1">
         <div className="line-clamp-1 text-sm font-medium text-text">{post?.content || log.hook || 'Video TikTok'}</div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
@@ -119,14 +110,14 @@ function VideoRow({ log, post, onDelete, onEdit }: { log: UploadLogEntry; post?:
           <span>{formatAge(log.uploadedAt)}</span>
         </div>
       </div>
-      <div className="grid grid-cols-5 gap-3 text-center lg:w-[420px]">
+      <div className="grid grid-cols-5 gap-3 text-center">
         <SmallMetric icon={<Eye className="size-3.5" />} value={metric(log.views)} />
         <SmallMetric icon={<Heart className="size-3.5" />} value={metric(log.likes)} />
         <SmallMetric icon={<MessageCircle className="size-3.5" />} value={metric(log.comments)} />
         <SmallMetric icon={<Bookmark className="size-3.5" />} value={metric(log.saves)} />
         <SmallMetric icon={<Share2 className="size-3.5" />} value={metric(log.shares)} />
       </div>
-      <div className="flex shrink-0 gap-2">
+      <div className="flex shrink-0 justify-end gap-2">
         {log.tiktokUrl ? <Button className="px-2" icon={<ExternalLink className="size-4" />} onClick={() => window.open(log.tiktokUrl)} /> : null}
         <Button icon={<Pencil className="size-4" />} onClick={onEdit}>Cập nhật</Button>
         {onDelete ? <Button className="px-2 text-rose-300" icon={<Trash2 className="size-4" />} onClick={onDelete} /> : null}

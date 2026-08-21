@@ -86,6 +86,19 @@ export function setGeneratedVideoPublishState(filePath: string, state: { status:
   fs.writeFileSync(metadataPath, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
 }
 
+export function markGeneratedVideoPublished(filePath: string, state: { caption?: string; publishedUrl?: string }) {
+  const resolved = path.resolve(filePath);
+  const item = listGeneratedVideos().find((video) => path.resolve(video.filePath) === resolved);
+  if (!item) throw new Error('Không tìm thấy video đã render.');
+  if (item.reviewStatus !== 'approved') throw new Error('Chỉ video đã kiểm duyệt mới có thể đánh dấu đã đăng.');
+  setGeneratedVideoPublishState(resolved, {
+    status: 'published',
+    caption: state.caption,
+    publishedUrl: state.publishedUrl
+  });
+  return listGeneratedVideos();
+}
+
 export function deleteGeneratedVideo(filePath: string) {
   const resolved = assertGeneratedVideoPath(filePath);
   fs.rmSync(resolved, { force: true });

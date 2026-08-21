@@ -141,6 +141,11 @@ export function normalizeVietnameseForSpeech(input: string) {
     output = output.replace(pattern, (_match, prefix: string) => `${prefix}${spoken}`);
   }
 
+  // Long all-caps Latin words are usually emphasis copied from social posts,
+  // not initialisms. Leaving the casing intact can make TTS engines spell or
+  // unnaturally separate English words (for example, "SHADOWING"). Keep short
+  // forms such as AI, CEO and KPI intact for the initialism handling below.
+  output = normalizeAllCapsLatinWords(output);
   output = spellUnknownInitialisms(output);
 
   return output
@@ -148,6 +153,13 @@ export function normalizeVietnameseForSpeech(input: string) {
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\s*\n\s*/g, '. ')
     .trim();
+}
+
+function normalizeAllCapsLatinWords(input: string) {
+  return input.replace(/(^|[^A-Za-z])([A-Z]{5,})(?=$|[^A-Za-z])/g, (_match, prefix: string, token: string) => {
+    if (!/[AEIOUY]/.test(token)) return `${prefix}${token}`;
+    return `${prefix}${token.toLocaleLowerCase('en-US')}`;
+  });
 }
 
 export const vietnameseSlangTtsInstructions = [

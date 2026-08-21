@@ -46,7 +46,7 @@ export async function importAndStoreThreadsPost(postUrl: string) {
 }
 
 export async function refreshPostReplies(post: ThreadsPost) {
-  const topReplies = filterUsefulReplies(await withRetry(() => scrapeThreadsPostReplies(post.url)));
+  const topReplies = filterUsefulReplies(await withRetry(() => scrapeThreadsPostReplies(post.url, post)), post);
   const next = { ...post, topReplies };
   const score = scorePost(next);
   const updated = {

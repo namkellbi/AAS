@@ -2,11 +2,11 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { CheckCircle2, CircleDashed, ExternalLink, LoaderCircle, Play, Send, Video, X } from 'lucide-react';
+import { CheckCircle2, CircleDashed, ExternalLink, FolderOpen, Play, Send, Video, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { normalizeTikTokCaption } from '@/lib/tiktokCaption';
-import type { GeneratedVideoItem, ThreadsPost } from '@/lib/types';
+import { MAX_TIKTOK_CAPTION_LENGTH, normalizeTikTokCaption } from '@/lib/tiktokCaption';
+import type { GeneratedVideoItem, ManualPublishRequest, ThreadsPost } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 type ReviewFilter = 'all' | 'pending' | 'approved';
@@ -19,7 +19,8 @@ export function VideoReviewQueue({
   onOpenDraft,
   onOpenLink,
   onOpenVideo,
-  onPublish
+  onMarkManual,
+  onPrepareUpload
 }: {
   language: 'en' | 'vi';
   posts: ThreadsPost[];
@@ -28,13 +29,18 @@ export function VideoReviewQueue({
   onOpenDraft: (post: ThreadsPost) => void;
   onOpenLink: (post: ThreadsPost) => void;
   onOpenVideo: (filePath: string) => void;
-  onPublish: (filePath: string, caption: string) => Promise<void>;
+  onMarkManual: (filePath: string, request: ManualPublishRequest) => Promise<void>;
+  onPrepareUpload: (filePath: string, caption: string) => Promise<void>;
 }) {
   const vi = language === 'vi';
   const [filter, setFilter] = useState<ReviewFilter>('all');
-  const [publishingPath, setPublishingPath] = useState<string | null>(null);
   const [publishTarget, setPublishTarget] = useState<GeneratedVideoItem | null>(null);
   const [captionDraft, setCaptionDraft] = useState('');
+  const [manualTarget, setManualTarget] = useState<GeneratedVideoItem | null>(null);
+  const [manualUrl, setManualUrl] = useState('');
+  const [manualCaption, setManualCaption] = useState('');
+  const [manualPublishMethod, setManualPublishMethod] = useState<'tiktok_studio' | 'mobile'>('tiktok_studio');
+  const [manualUploadedAt, setManualUploadedAt] = useState(() => localDateTimeValue(new Date()));
   const rows = useMemo(() => {
     const manualPosts = [...posts]
       .filter((post) => post.source === 'manual')
@@ -84,22 +90,32 @@ export function VideoReviewQueue({
               {!video && post ? <Button variant="primary" className="h-9" icon={<Video className="size-4" />} onClick={() => onOpenDraft(post)}>{vi ? 'Tạo video' : 'Create video'}</Button> : null}
               {video ? <Button className="h-9" icon={<Play className="size-4" />} onClick={() => onOpenVideo(video.filePath)}>{vi ? 'Xem video' : 'Open video'}</Button> : null}
               {video?.reviewStatus === 'approved' && video.publishStatus !== 'published' ? (
+                <>
+                <Button
+                  className="h-9"
+                  icon={<CheckCircle2 className="size-4" />}
+                  onClick={() => {
+                    setManualTarget(video);
+                    setManualUrl('');
+                    setManualCaption(normalizeTikTokCaption(video.publishCaption ?? ''));
+                    setManualPublishMethod('tiktok_studio');
+                    setManualUploadedAt(localDateTimeValue(new Date()));
+                  }}
+                >
+                  {vi ? 'Đã đăng – ghi log' : 'Posted – record log'}
+                </Button>
                 <Button
                   variant="primary"
                   className="h-9"
-                  icon={publishingPath === video.filePath ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
-                  disabled={Boolean(publishingPath)}
+                  icon={<Send className="size-4" />}
                   onClick={() => {
                     setPublishTarget(video);
                     setCaptionDraft(normalizeTikTokCaption(video.publishCaption ?? ''));
                   }}
                 >
-                  {publishingPath === video.filePath
-                    ? (vi ? 'Đang xuất bản...' : 'Publishing...')
-                    : video.publishStatus === 'verification_required'
-                      ? (vi ? 'Xử lý lại' : 'Resolve')
-                      : (vi ? 'Xuất bản' : 'Publish')}
+                  {vi ? 'Chuẩn bị đăng' : 'Prepare upload'}
                 </Button>
+                </>
               ) : null}
             </div>
           </article>
@@ -113,7 +129,7 @@ export function VideoReviewQueue({
             <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">TikTok</div>
-                <h2 className="mt-1 text-lg font-semibold text-text">{vi ? 'Xác nhận xuất bản' : 'Confirm publish'}</h2>
+                <h2 className="mt-1 text-lg font-semibold text-text">{vi ? 'Đăng an toàn qua TikTok Studio' : 'Safe upload via TikTok Studio'}</h2>
               </div>
               <Button className="px-2" icon={<X className="size-4" />} onClick={() => setPublishTarget(null)} />
             </header>
@@ -130,35 +146,95 @@ export function VideoReviewQueue({
                 <div className="mt-1 truncate font-medium text-text">{publishTarget.filePath.split(/[\\/]/).pop()}</div>
               </div>
               <label className="grid gap-2 text-xs text-muted">
-                {vi ? 'Caption và hashtag' : 'Caption and hashtags'}
+                {vi ? 'Caption (mặc định không hashtag)' : 'Caption (no hashtags by default)'}
                 <textarea
                   autoFocus
                   className="min-h-40 resize-y rounded-md border border-border bg-background p-3 text-sm leading-6 text-text outline-none focus:border-accent"
-                  maxLength={2200}
+                  maxLength={MAX_TIKTOK_CAPTION_LENGTH}
                   value={captionDraft}
                   onChange={(event) => setCaptionDraft(event.target.value)}
                 />
               </label>
-              <div className="text-right text-xs text-muted">{captionDraft.length}/2200</div>
+              <div className="text-right text-xs text-muted">{captionDraft.length}/{MAX_TIKTOK_CAPTION_LENGTH}</div>
               <div className="rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-100">
-                {vi ? 'Sau khi xác nhận, app sẽ mở TikTok, tải đúng file này và bấm đăng. Browser có thể yêu cầu bạn đăng nhập hoặc hoàn tất CAPTCHA/2FA.' : 'After confirmation, the app will open TikTok, upload this file, and submit the post. Login or verification may be required.'}
+                {vi
+                  ? 'App sẽ copy caption, mở đúng thư mục video và mở TikTok Studio trong trình duyệt thường. Bạn kéo file vào, chọn “Mọi người”, kiểm tra preview rồi tự bấm Đăng. Tool không còn điều khiển TikTok bằng Playwright.'
+                  : 'The app will copy the caption, reveal the exact video, and open TikTok Studio in your normal browser. Drag in the file, choose Everyone, review the preview, then click Post yourself.'}
               </div>
             </div>
             <footer className="flex justify-end gap-2 border-t border-border px-5 py-4">
               <Button onClick={() => setPublishTarget(null)}>{vi ? 'Hủy' : 'Cancel'}</Button>
               <Button
                 variant="primary"
-                icon={<Send className="size-4" />}
+                icon={<FolderOpen className="size-4" />}
                 onClick={async () => {
                   const target = publishTarget;
                   setPublishTarget(null);
-                  setPublishingPath(target.filePath);
-                  try { await onPublish(target.filePath, captionDraft); } finally { setPublishingPath(null); }
+                  await onPrepareUpload(target.filePath, captionDraft);
                 }}
               >
-                {publishTarget.publishStatus === 'verification_required'
-                  ? (vi ? 'Chắc chắn chưa đăng — Thử lại' : 'Not posted — Retry')
-                  : (vi ? 'Xuất bản ngay' : 'Publish now')}
+                {vi ? 'Copy caption và mở Studio' : 'Copy caption and open Studio'}
+              </Button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {manualTarget ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-5" onMouseDown={() => setManualTarget(null)}>
+          <section className="w-full max-w-lg rounded-lg border border-border bg-[#0c0f13] shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+            <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-300">TikTok</div>
+                <h2 className="mt-1 text-lg font-semibold text-text">{vi ? 'Ghi nhận đã đăng thủ công' : 'Record manual post'}</h2>
+              </div>
+              <Button className="px-2" icon={<X className="size-4" />} onClick={() => setManualTarget(null)} />
+            </header>
+            <div className="space-y-4 p-5">
+              <div className="truncate rounded-md border border-border bg-panelSoft px-3 py-2 text-sm text-text">{manualTarget.filePath.split(/[\\/]/).pop()}</div>
+              <label className="grid gap-2 text-xs text-muted">
+                {vi ? 'Link bài TikTok (không bắt buộc)' : 'TikTok post URL (optional)'}
+                <input className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:border-accent" placeholder="https://www.tiktok.com/@.../video/..." type="url" value={manualUrl} onChange={(event) => setManualUrl(event.target.value)} />
+              </label>
+              <label className="grid gap-2 text-xs text-muted">
+                {vi ? 'Cách đã đăng' : 'Publishing method'}
+                <select className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:border-accent" value={manualPublishMethod} onChange={(event) => setManualPublishMethod(event.target.value as 'tiktok_studio' | 'mobile')}>
+                  <option value="tiktok_studio">TikTok Studio · trình duyệt thường</option>
+                  <option value="mobile">TikTok app · điện thoại</option>
+                </select>
+              </label>
+              <label className="grid gap-2 text-xs text-muted">
+                {vi ? 'Caption thực tế đã đăng (không bắt buộc)' : 'Caption actually posted (optional)'}
+                <textarea className="min-h-24 resize-y rounded-md border border-border bg-background p-3 text-sm leading-6 text-text outline-none focus:border-accent" maxLength={MAX_TIKTOK_CAPTION_LENGTH} value={manualCaption} onChange={(event) => setManualCaption(event.target.value)} />
+              </label>
+              <label className="grid gap-2 text-xs text-muted">
+                {vi ? 'Thời điểm đã đăng' : 'Published at'}
+                <input className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:border-accent" type="datetime-local" value={manualUploadedAt} onChange={(event) => setManualUploadedAt(event.target.value)} />
+              </label>
+              <div className="rounded-md border border-sky-400/20 bg-sky-400/5 px-3 py-2 text-xs leading-5 text-sky-100">
+                {vi ? 'Thao tác này sẽ chuyển video sang Đã đăng và tạo một dòng trong Upload log để theo dõi hiệu suất.' : 'This marks the video as published and creates an Upload log entry for performance tracking.'}
+              </div>
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-border px-5 py-4">
+              <Button onClick={() => setManualTarget(null)}>{vi ? 'Hủy' : 'Cancel'}</Button>
+              <Button
+                variant="primary"
+                icon={<CheckCircle2 className="size-4" />}
+                disabled={!manualUploadedAt}
+                onClick={async () => {
+                  const target = manualTarget;
+                  const uploadedAt = new Date(manualUploadedAt);
+                  if (Number.isNaN(uploadedAt.getTime())) return;
+                  setManualTarget(null);
+                  await onMarkManual(target.filePath, {
+                    publishedUrl: manualUrl.trim(),
+                    caption: manualCaption,
+                    uploadedAt: uploadedAt.toISOString(),
+                    publishMethod: manualPublishMethod
+                  });
+                }}
+              >
+                {vi ? 'Xác nhận đã đăng' : 'Confirm posted'}
               </Button>
             </footer>
           </section>
@@ -170,14 +246,14 @@ export function VideoReviewQueue({
 
 function PublishBadge({ video, vi }: { video: GeneratedVideoItem; vi: boolean }) {
   if (video.publishStatus === 'not_published') return null;
-  const labels = {
-    publishing: vi ? 'Đang xuất bản' : 'Publishing',
-    published: vi ? 'Đã đăng' : 'Published',
-    failed: vi ? 'Đăng lỗi' : 'Publish failed',
-    verification_required: vi ? 'Cần xác minh' : 'Verify on TikTok'
-  } as const;
-  const tone = video.publishStatus === 'published' ? 'bg-sky-400/10 text-sky-300' : video.publishStatus === 'failed' ? 'bg-rose-400/10 text-rose-300' : 'bg-violet-400/10 text-violet-300';
-  return <span title={video.publishError} className={cn('inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px]', tone)}>{video.publishStatus === 'publishing' ? <LoaderCircle className="size-3 animate-spin" /> : <Send className="size-3" />}{labels[video.publishStatus]}</span>;
+  if (video.publishStatus === 'published') {
+    return <span className="inline-flex items-center gap-1 rounded-full bg-sky-400/10 px-2 py-1 text-[11px] text-sky-300"><Send className="size-3" />{vi ? 'Đã đăng' : 'Published'}</span>;
+  }
+  return (
+    <span title={video.publishError} className="inline-flex items-center gap-1 rounded-full bg-amber-400/10 px-2 py-1 text-[11px] text-amber-300">
+      <CircleDashed className="size-3" />{vi ? 'Trạng thái từ automation cũ' : 'Legacy automation state'}
+    </span>
+  );
 }
 
 function StatusBadge({ video, vi, onToggle }: { video?: GeneratedVideoItem; vi: boolean; onToggle?: () => void }) {
@@ -208,4 +284,9 @@ function formatDate(value: string | undefined, language: 'en' | 'vi') {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return new Intl.DateTimeFormat(language === 'vi' ? 'vi-VN' : 'en-US', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function localDateTimeValue(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }

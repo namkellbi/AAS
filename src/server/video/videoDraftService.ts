@@ -16,6 +16,7 @@ import { withRetry } from '@/server/utils/withRetry';
 
 type RenderVideoDraftRequest = {
   backgroundPath: string;
+  backgroundMusicEnabled?: boolean;
   demoPath?: string;
   post: ThreadsPost;
   analysis: AIAnalysis;
@@ -99,12 +100,15 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   if (!request.backgroundPath || !fs.existsSync(request.backgroundPath)) throw new Error('Background clip is missing. Select a valid clip from Asset Library before rendering.');
   const selectedBackgroundPath = request.backgroundPath;
   const backgroundDuration = await probeDuration(selectedBackgroundPath);
-  const selectedMusicPath = pickRandomResource(
-    path.resolve(process.cwd(), 'data', 'background-music'),
-    audioExtensions,
-    'video.last_background_music'
-  );
-  if (!selectedMusicPath) throw new Error('Không tìm thấy file nhạc nền hợp lệ trong data/background-music.');
+  const backgroundMusicEnabled = request.backgroundMusicEnabled !== false;
+  const selectedMusicPath = backgroundMusicEnabled
+    ? pickRandomResource(
+      path.resolve(process.cwd(), 'data', 'background-music'),
+      audioExtensions,
+      'video.last_background_music'
+    )
+    : undefined;
+  if (backgroundMusicEnabled && !selectedMusicPath) throw new Error('Không tìm thấy file nhạc nền hợp lệ trong data/background-music.');
   const useOriginalPostReadOnly = !getCreativeAiEnabled();
   const karaokeEnabled = getKaraokeCaptionsEnabled();
   if (karaokeEnabled && !openAiApiKey) throw new Error('OpenAI API key is required for Whisper karaoke timestamps. Add the key or turn off Karaoke caption.');
@@ -118,7 +122,8 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     postId: request.post.id,
     createdAt: new Date().toISOString(),
     backgroundVideo: selectedBackgroundPath,
-    backgroundMusic: selectedMusicPath
+    backgroundMusicEnabled,
+    backgroundMusic: selectedMusicPath ?? null
   }, null, 2), 'utf8');
   const outputPath = path.join(exportDir, `${exportName}.mp4`);
   const voice = getDefaultVoice();
@@ -130,7 +135,7 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   const replyTtsTexts = replies.map((reply, index) => request.replyTtsTexts?.[index]?.trim() || reply.content);
   if (replies.some((reply) => !reply.authorAvatarUrl || !reply.mediaUrls) && request.post.url) {
     onProgress({ percent: 7, message: 'Đang bổ sung avatar và reaction cho replies...' });
-    const refreshed = await scrapeThreadsPostReplies(request.post.url).catch(() => []);
+    const refreshed = await scrapeThreadsPostReplies(request.post.url, request.post).catch(() => []);
     replies = replies.map((reply) => {
       const source = refreshed.find((candidate) => candidate.id === reply.id)
         ?? refreshed.find((candidate) => candidate.content.trim() === reply.content.trim());
@@ -231,8 +236,12 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   }
   onProgress({ percent: 82, message: 'Đang ghép video hoàn chỉnh...' });
   await concatVideoSegments(segmentPaths, outputPath);
-  onProgress({ percent: 87, message: 'Đang lồng nhạc nền...' });
-  await mixBackgroundMusic(outputPath, selectedMusicPath);
+  if (selectedMusicPath) {
+    onProgress({ percent: 87, message: 'Đang lồng nhạc nền...' });
+    await mixBackgroundMusic(outputPath, selectedMusicPath);
+  } else {
+    onProgress({ percent: 87, message: 'Đã tắt nhạc nền, giữ nguyên voiceover...' });
+  }
 
   onProgress({ percent: 90, message: 'Đang tạo metadata, checklist và thumbnail...' });
   await writeMetadata(workDir, request.analysis, ctaText, request.product, { provider: ttsProvider, voice, speed }, path.basename(outputPath));
@@ -271,7 +280,7 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
 
     const variantOutput = path.join(exportDir, `${exportName}-variant-${index + 1}.mp4`);
     await concatVideoSegments([...(variantHook ? [variantHook.outputPath] : []), ...middleSegments, variantOutro.outputPath], variantOutput);
-    await mixBackgroundMusic(variantOutput, selectedMusicPath);
+    if (selectedMusicPath) await mixBackgroundMusic(variantOutput, selectedMusicPath);
     await writeMetadata(variantDir, request.analysis, variantCtaText, request.product, { provider: ttsProvider, voice, speed }, path.basename(variantOutput));
     fs.writeFileSync(
       path.join(variantDir, 'variant-info.json'),
@@ -333,7 +342,7 @@ async function renderPostCard(post: ThreadsPost, text: string, outputPath: strin
     likes: post.likes,
     replies: post.replies,
     reposts: post.reposts
-  }));
+  }, false, undefined, post.imageUrls[0]));
 }
 
 async function renderReplyCard(reply: SelectedReply, outputPath: string) {
@@ -572,7 +581,7 @@ async function writeMetadata(exportDir: string, analysis: AIAnalysis, ctaText: s
     '',
     '[ ] 1. Mở TikTok và chọn video',
     useOriginalPostReadOnly ? '[ ] 2. Viết caption thủ công' : '[ ] 2. Chọn caption từ metadata',
-    '[ ] 3. Thêm hashtag',
+    '[ ] 3. Để caption không hashtag mặc định; chỉ thêm hashtag thật sự liên quan nếu cần',
     product
       ? `[ ] 4. Gắn đúng sản phẩm: ${product.name}${product.affiliateLink ? ` (${product.affiliateLink})` : ''}`
       : `[ ] 4. TikTok Shop: search "${metadata.product.tiktok_shop_keyword}" và gắn sản phẩm`,

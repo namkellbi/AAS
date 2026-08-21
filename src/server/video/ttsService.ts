@@ -29,7 +29,7 @@ import { normalizeVietnameseSpeechBatch } from '@/server/video/speechNormalizati
 import { synthesizeVieneuLocal } from '@/server/video/vieneuLocalService';
 import { withRetry } from '@/server/utils/withRetry';
 
-const speechProcessingVersion = 'multi-provider-vieneu-v1';
+const speechProcessingVersion = 'multi-provider-vieneu-v2-lowercase';
 
 type SpeechRequest = {
   apiKey?: string;
@@ -49,6 +49,12 @@ export async function synthesizeSpeech(request: SpeechRequest) {
 
   const effectiveRequest: SpeechRequest = {
     ...request,
+    // VieNeu is optimized for Vietnamese and may interpret capitalization as
+    // an instruction to spell Latin text. Casing carries no pronunciation
+    // value here, so normalize the complete transcript before synthesis.
+    input: request.provider === 'vieneu'
+      ? request.input.toLocaleLowerCase('vi-VN')
+      : request.input,
     instructions: [
       request.instructions.trim(),
       speedInstruction(request.speed),

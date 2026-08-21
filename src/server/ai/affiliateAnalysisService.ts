@@ -102,7 +102,7 @@ export async function analyzeAffiliateOpportunity(post: ThreadsPost, goal: Conte
               best_replies: [{ reply_id: 'id', content: 'reply', type: 'classification', why_selected: 'lý do chọn' }],
               video_potential_score: '0-100',
               video_potential_breakdown: { visual: '0-25', demo: '0-25', emotional: '0-25', curiosity: '0-25' },
-              tiktok_caption: 'caption <= 150 ký tự',
+              tiktok_caption: 'caption <= 150 ký tự, không hashtag',
               hashtags: ['5-8 hashtag'],
               product_keywords: { tiktok_shop: 'keyword TikTok Shop', shopee: 'keyword Shopee' },
               matched_product_id: 'id của sản phẩm trong product_catalog nếu khớp pain point, ngược lại null — không được bịa',
@@ -111,7 +111,7 @@ export async function analyzeAffiliateOpportunity(post: ThreadsPost, goal: Conte
                 transition_line: goal === 'engagement' ? '1-2 câu văn nói chuyển từ câu chuyện sang phần chốt, khoảng 8-20 chữ, tự nhiên hoặc dí dỏm' : '1-2 câu văn nói chuyển từ pain point sang giải pháp, khoảng 8-20 chữ, tự nhiên hoặc dí dỏm',
                 solution_text: goal === 'engagement' ? '2-4 câu văn nói chốt câu chuyện: góc nhìn hoặc bài học nhỏ, KHÔNG nhắc sản phẩm' : '3-5 câu văn nói ngắn giới thiệu giải pháp tự nhiên, cụ thể, demo được; không sale cứng',
                 cta_text: goal === 'engagement' ? 'câu hỏi cuối video kéo comment hoặc lời rủ follow, 1 câu văn nói khoảng 8-16 chữ' : 'CTA cuối 1 câu văn nói khoảng 8-16 chữ, low-pressure, có thể nhắc xem giỏ hàng',
-                caption_variants: ['giật tít', 'storytelling', 'câu hỏi']
+                caption_variants: ['giật tít không hashtag', 'storytelling không hashtag', 'câu hỏi không hashtag']
               }
             },
             spoken_rewrite_examples: [

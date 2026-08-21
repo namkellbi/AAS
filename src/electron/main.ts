@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import type { OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { analyzeAffiliateOpportunity, testOpenAIConnection } from '@/server/ai/affiliateAnalysisService';
@@ -49,10 +49,10 @@ import { renderVideoDraft } from '@/server/video/videoDraftService';
 import { createTtsPreview, testGeminiConnection } from '@/server/video/ttsService';
 import { normalizeVietnameseSpeechBatch } from '@/server/video/speechNormalizationService';
 import { getVieneuLocalStatus, stopVieneuLocalService } from '@/server/video/vieneuLocalService';
-import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, registerAsset, setGeneratedVideoApproved } from '@/server/services/assetLibraryService';
-import { publishGeneratedVideoToTikTok, syncTikTokPerformance } from '@/server/services/tiktokPublishingService';
-import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
+import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, markGeneratedVideoPublished, registerAsset, setGeneratedVideoApproved, setGeneratedVideoPublishState } from '@/server/services/assetLibraryService';
+import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, ManualPublishRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
 import { isTtsVoiceForProvider } from '@/lib/tts';
+import { normalizeTikTokCaption } from '@/lib/tiktokCaption';
 
 const isDev = !app.isPackaged;
 const shouldOpenDevTools = process.env.OPEN_DEVTOOLS === '1';
@@ -239,8 +239,53 @@ function registerIpc() {
   });
   ipcMain.handle('generated-videos:delete', async (_event, filePath: string) => deleteGeneratedVideo(filePath));
   ipcMain.handle('generated-videos:set-approved', async (_event, filePath: string, approved: boolean) => setGeneratedVideoApproved(filePath, approved));
-  ipcMain.handle('generated-videos:publish-tiktok', async (_event, filePath: string, caption: string) => publishGeneratedVideoToTikTok(filePath, caption));
-  ipcMain.handle('tiktok:sync-performance', async () => syncTikTokPerformance());
+  ipcMain.handle('generated-videos:prepare-tiktok-upload', async (_event, filePath: string, caption: string) => {
+    const resolved = assertGeneratedVideoPath(filePath);
+    const video = listGeneratedVideos().find((item) => item.filePath === resolved);
+    if (!video) throw new Error('Không tìm thấy video đã render.');
+    if (video.reviewStatus !== 'approved') throw new Error('Hãy kiểm duyệt video trước khi chuẩn bị đăng.');
+    const normalizedCaption = normalizeTikTokCaption(caption);
+    clipboard.writeText(normalizedCaption);
+    setGeneratedVideoPublishState(resolved, { status: 'not_published', caption: normalizedCaption });
+    shell.showItemInFolder(resolved);
+    try {
+      await shell.openExternal('https://www.tiktok.com/tiktokstudio/upload?from=webapp');
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Đã mở thư mục và copy caption nhưng không mở được TikTok Studio: ${error instanceof Error ? error.message : String(error)}`,
+        caption: normalizedCaption,
+        videos: listGeneratedVideos()
+      };
+    }
+    return {
+      ok: true,
+      message: 'Đã copy caption, mở đúng file và TikTok Studio. Hãy kéo file vào, chọn Mọi người, kiểm tra preview rồi tự bấm Đăng.',
+      caption: normalizedCaption,
+      videos: listGeneratedVideos()
+    };
+  });
+  // Compatibility guards for a renderer/preload that was already open before
+  // this update. Never fall back to the retired Playwright automation.
+  ipcMain.handle('generated-videos:publish-tiktok', async () => ({
+    ok: false,
+    message: 'Đăng tự động bằng Playwright đã bị vô hiệu hóa. Hãy dùng Chuẩn bị đăng để mở TikTok Studio.',
+    videos: listGeneratedVideos()
+  }));
+  ipcMain.handle('generated-videos:mark-published', async (_event, filePath: string, request: ManualPublishRequest) => ({
+    ok: true,
+    message: 'Đã đánh dấu video là đã đăng thủ công.',
+    publishedUrl: request.publishedUrl || undefined,
+    videos: markGeneratedVideoPublished(filePath, request)
+  }));
+  ipcMain.handle('tiktok:sync-performance', async () => ({
+    ok: false,
+    message: 'Browser scraping đã bị vô hiệu hóa. Hãy cập nhật số liệu trên từng video.',
+    logs: listUploadLogs(),
+    updated: 0,
+    eligible: 0,
+    remaining: 0
+  }));
   ipcMain.handle('upload-log:list', async () => listUploadLogs());
   ipcMain.handle('upload-log:save', async (_event, entry: UploadLogEntry) => saveUploadLog(entry));
   ipcMain.handle('upload-log:delete', async (_event, id: string) => deleteUploadLog(id));

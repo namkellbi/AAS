@@ -1267,7 +1267,14 @@ function rowToPost(row: Record<string, unknown>): ThreadsPost {
     velocityScore: Number(row.velocity_score ?? 0),
     engagementGrowthPercent: Number(row.engagement_growth_percent ?? 0),
     emotionalCategory: String(row.emotional_category)
-    , topReplies: filterUsefulReplies(jsonParse<ThreadsReply[]>(String(row.top_replies ?? '[]'), []))
+    , topReplies: filterUsefulReplies(
+      jsonParse<ThreadsReply[]>(String(row.top_replies ?? '[]'), []),
+      {
+        author: String(row.author),
+        authorHandle: row.author_handle ? String(row.author_handle) : undefined,
+        content: String(row.content)
+      }
+    )
     , trendState: trendStateValue(row.trend_state)
     , likesPerHour: Number(row.likes_per_hour ?? 0)
     , repliesPerHour: Number(row.replies_per_hour ?? 0)

@@ -538,7 +538,7 @@ export default function HomePage() {
   }
 
   async function loadOrShowReplies(post: ThreadsPost) {
-    const usefulReplies = filterUsefulReplies(post.topReplies);
+    const usefulReplies = filterUsefulReplies(post.topReplies, post);
     if (usefulReplies.length) {
       setReplyPost({ ...post, topReplies: usefulReplies });
       return;
@@ -549,7 +549,7 @@ export default function HomePage() {
     setError(null);
     try {
       const updated = await api.fetchPostReplies(post);
-      const filteredReplies = filterUsefulReplies(updated.topReplies);
+      const filteredReplies = filterUsefulReplies(updated.topReplies, updated);
       const cleaned = { ...updated, topReplies: filteredReplies };
       setPosts((current) => mergePosts([cleaned], current));
       setReplyPost(cleaned);
@@ -674,41 +674,61 @@ export default function HomePage() {
               onOpenDraft={handleGenerateTikTokIdea}
               onOpenLink={openPostLink}
               onOpenVideo={(filePath) => void window.desktopAPI?.openGeneratedVideo(filePath)}
-              onPublish={async (filePath, caption) => {
-                const result = await window.desktopAPI?.publishGeneratedVideo(filePath, caption);
+              onMarkManual={async (filePath, request) => {
+                const video = generatedVideos.find((item) => item.filePath === filePath);
+                const post = video ? posts.find((item) => item.id === video.postId) : undefined;
+                if (!post) {
+                  showHealth({ ok: false, message: 'Không tìm thấy post gốc để ghi Upload log.' });
+                  return;
+                }
+                const markPublished = window.desktopAPI?.markGeneratedVideoPublished;
+                if (typeof markPublished !== 'function') {
+                  showHealth({
+                    ok: false,
+                    message: 'Electron đang dùng preload cũ. Hãy đóng hoàn toàn ứng dụng rồi mở lại để dùng chức năng Đã đăng thủ công.'
+                  });
+                  return;
+                }
+                const result = await markPublished(filePath, request);
                 if (!result) return;
                 setGeneratedVideos(result.videos);
-                showHealth({ ok: result.ok, message: result.message });
-                if (result.publishedUrl) {
-                  const video = result.videos.find((item) => item.filePath === filePath);
-                  const post = video ? posts.find((item) => item.id === video.postId) : undefined;
-                  if (post) {
-                    await window.desktopAPI?.saveUploadLog({
-                      id: crypto.randomUUID(),
-                      postId: post.id,
-                      tiktokUrl: result.publishedUrl,
-                      productName: '',
-                      hook: caption.slice(0, 160),
-                      contentFormat: 'threads-story',
-                      uploadedAt: new Date().toISOString(),
-                      views: 0,
-                      likes: 0,
-                      clicks: 0,
-                      orders: 0,
-                      revenue: 0,
-                      commission: 0,
-                      status: 'published',
-                      note: 'Đăng tự động từ hàng đợi xuất bản.',
-                      contentGoal: analysis[post.id]?.contentGoal ?? 'engagement',
-                      followersGained: 0,
-                      comments: 0,
-                      saves: 0,
-                      shares: 0,
-                      variantLabel: ''
-                    });
-                    setUploadLogs(await window.desktopAPI!.getUploadLogs());
-                  }
+                await window.desktopAPI?.saveUploadLog({
+                  id: crypto.randomUUID(),
+                  postId: post.id,
+                  tiktokUrl: request.publishedUrl,
+                  productName: '',
+                  hook: (request.caption || post.content).slice(0, 160),
+                  contentFormat: 'threads-story',
+                  uploadedAt: request.uploadedAt,
+                  views: 0,
+                  likes: 0,
+                  clicks: 0,
+                  orders: 0,
+                  revenue: 0,
+                  commission: 0,
+                  status: 'published',
+                  note: request.publishMethod === 'mobile'
+                    ? 'Đăng thủ công bằng ứng dụng TikTok trên điện thoại.'
+                    : 'Đăng thủ công bằng TikTok Studio trong trình duyệt thường.',
+                  contentGoal: analysis[post.id]?.contentGoal ?? 'engagement',
+                  followersGained: 0,
+                  comments: 0,
+                  saves: 0,
+                  shares: 0,
+                  variantLabel: ''
+                });
+                setUploadLogs(await window.desktopAPI!.getUploadLogs());
+                showHealth({ ok: true, message: 'Đã chuyển video sang Đã đăng và ghi Upload log.' });
+              }}
+              onPrepareUpload={async (filePath, caption) => {
+                const prepareUpload = window.desktopAPI?.prepareTikTokUpload;
+                if (typeof prepareUpload !== 'function') {
+                  showHealth({ ok: false, message: 'Hãy đóng hoàn toàn Electron rồi mở lại để nạp quy trình đăng TikTok Studio mới.' });
+                  return;
                 }
+                const result = await prepareUpload(filePath, caption);
+                setGeneratedVideos(result.videos);
+                showHealth({ ok: result.ok, message: result.message });
               }}
             />
           ) : activeView === 'opportunities' ? (
@@ -825,12 +845,6 @@ export default function HomePage() {
                   setUploadLogs(await window.desktopAPI.getUploadLogs());
                   await refreshKeywordWorkspace();
                 }
-              }}
-              onSync={async () => {
-                const result = await window.desktopAPI?.syncTikTokPerformance();
-                if (!result) return;
-                setUploadLogs(result.logs);
-                showHealth({ ok: result.ok, message: result.message });
               }}
             />
           ) : (
@@ -1859,7 +1873,7 @@ function formatGeneratedDate(value: string) {
 }
 
 function RepliesDrawer({ post, loading, onClose, onReload }: { post: ThreadsPost; loading: boolean; onClose: () => void; onReload: () => void }) {
-  const replies = filterUsefulReplies(post.topReplies);
+  const replies = filterUsefulReplies(post.topReplies, post);
   return <aside className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-x-hidden overflow-y-auto border-l border-border bg-[#0c0f13] p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between gap-3"><div className="min-w-0"><div className="text-xs uppercase tracking-[0.14em] text-muted">Top replies ({replies.length})</div><div className="mt-1 truncate text-base font-semibold text-text">{post.author}</div></div><Button className="shrink-0 px-2" icon={<X className="size-4" />} onClick={onClose} /></div><div className="mb-4"><Button disabled={loading} icon={<RefreshCcw className={cn('size-4', loading && 'animate-spin')} />} onClick={onReload}>{loading ? 'Đang tải replies...' : 'Tải lại replies'}</Button></div><div className="space-y-3">{replies.map((reply) => <div key={reply.id} className="min-w-0 overflow-hidden rounded-lg border border-border bg-panel p-3"><div className="break-all text-xs font-semibold text-sky-200">@{reply.author}</div><div className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300 [overflow-wrap:anywhere]">{reply.content}</div>{reply.mediaUrls?.[0] ? <img src={reply.mediaUrls[0]} alt="Media reply" className="mt-2 max-h-56 w-full rounded-md object-cover" /> : null}<div className="mt-2 text-xs text-muted">{reply.likes} likes</div></div>)}{!replies.length ? <div className="text-sm text-muted">Chưa tải được nội dung replies cho bài này.</div> : null}</div></aside>;
 }
 

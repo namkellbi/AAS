@@ -1,19 +1,23 @@
-export const TIKTOK_REQUIRED_HASHTAGS = '#threadsvietnam #threads #commentdao #fyp #xuhuong';
-
-const MAX_TIKTOK_CAPTION_LENGTH = 2200;
+export const MAX_TIKTOK_CAPTION_LENGTH = 2200;
+const LEGACY_FORCED_HASHTAGS = '#threadsvietnam #threads #commentdao #fyp #xuhuong';
 
 export function normalizeTikTokCaption(caption: string) {
-  const body = caption
-    // AI-generated/product hashtags are not part of the publishing policy.
-    // Remove every hashtag here, then append the single approved fixed set.
-    .replace(/(^|\s)#[\p{L}\p{N}_]+/gu, '$1')
-    .trim()
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n');
-  const separator = body ? '\n\n' : '';
-  const maximumBodyLength = MAX_TIKTOK_CAPTION_LENGTH - separator.length - TIKTOK_REQUIRED_HASHTAGS.length;
-  const trimmedBody = body.slice(0, maximumBodyLength)
+  const withoutLegacyBlock = removeLegacyForcedHashtags(caption);
+  const limited = withoutLegacyBlock.slice(0, MAX_TIKTOK_CAPTION_LENGTH);
+  return /[\uD800-\uDBFF]$/.test(limited) ? limited.slice(0, -1) : limited;
+}
+
+function removeLegacyForcedHashtags(caption: string) {
+  const suffixPattern = new RegExp(`(?:\\r?\\n){0,2}${escapeRegExp(LEGACY_FORCED_HASHTAGS)}\\s*$`);
+  if (!suffixPattern.test(caption)) return caption;
+  return caption
+    .replace(suffixPattern, '')
+    // Several legacy captions had the first tag glued to the title before
+    // the fixed block was appended (for example "title#threadsvietnam").
+    .replace(/#threadsvietnam\s*$/i, '')
     .trimEnd();
-  return `${trimmedBody}${trimmedBody ? separator : ''}${TIKTOK_REQUIRED_HASHTAGS}`;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

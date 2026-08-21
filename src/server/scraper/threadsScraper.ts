@@ -53,17 +53,65 @@ export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPos
 
     const request: FetchRequest = { mode: 'manual', query: normalizedUrl, maxPosts: 1 };
     const rawPosts = await extractVisiblePosts(page, request);
-    const rawPost = rawPosts.find((post) => isSameThreadsPostUrl(post.url, normalizedUrl) || post.id === postId) ?? await extractPermalinkPost(page, normalizedUrl);
+    const visiblePost = rawPosts.find((post) => isSameThreadsPostUrl(post.url, normalizedUrl) || post.id === postId);
+    const permalinkPost = await extractPermalinkPost(page, normalizedUrl);
+    const rawPost = visiblePost
+      ? {
+        ...visiblePost,
+        imageUrls: Array.from(new Set([...(visiblePost.imageUrls ?? []), ...(permalinkPost?.imageUrls ?? [])]))
+      }
+      : permalinkPost ?? await extractMetadataPost(page, normalizedUrl);
     if (!rawPost || !isUsablePost(rawPost)) {
-      throw new Error('Could not read this Threads post. Confirm that the link is a public Threads post permalink and try again.');
+      const diagnostic = await page.evaluate(() => ({
+        title: document.title,
+        postLinks: document.querySelectorAll('a[href*="/post/"]').length,
+        pressableContainers: document.querySelectorAll('[data-pressable-container="true"]').length,
+        bodyText: document.body.innerText.replace(/\s+/g, ' ').trim().slice(0, 500)
+      })).catch(() => ({ title: '', postLinks: 0, pressableContainers: 0, bodyText: '' }));
+      throw new Error(
+        `Could not read this Threads post. URL=${page.url()} title=${JSON.stringify(diagnostic.title)} `
+        + `postLinks=${diagnostic.postLinks} containers=${diagnostic.pressableContainers} `
+        + `visibleText=${JSON.stringify(diagnostic.bodyText)}`
+      );
     }
 
-    const topReplies = filterUsefulReplies(await fetchTopReplies(page, normalizedUrl).catch(() => []));
+    const topReplies = filterUsefulReplies(await fetchTopReplies(page, normalizedUrl, rawPost).catch(() => []), rawPost);
     await context.storageState({ path: config.threadsStorageState });
     return scoreRawPost({ ...rawPost, id: postId, url: normalizedUrl, source: 'manual', keyword: undefined }, topReplies);
   } finally {
     await context.close();
   }
+}
+
+async function extractMetadataPost(page: Page, postUrl: string): Promise<RawPost | null> {
+  return page.evaluate((rootUrl) => {
+    const postId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0];
+    const handle = rootUrl.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1];
+    const description = document.querySelector<HTMLMetaElement>('meta[property="og:description"]')?.content?.trim()
+      || document.querySelector<HTMLMetaElement>('meta[name="description"]')?.content?.trim();
+    if (!postId || !handle || !description || /^this content is unavailable$/i.test(description)) return null;
+
+    const title = document.querySelector<HTMLMetaElement>('meta[property="og:title"]')?.content?.trim() ?? '';
+    const displayName = title.match(/^(.*?)\s*\(@[^)]+\)\s+on Threads$/i)?.[1]?.trim();
+    const imageUrls = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[property="og:image"], meta[name="twitter:image"]'))
+      .map((meta) => meta.content?.trim())
+      .filter((url): url is string => Boolean(url));
+
+    return {
+      id: postId,
+      author: displayName || handle,
+      authorHandle: `@${handle}`,
+      content: description.slice(0, 900),
+      likes: 0,
+      replies: 0,
+      reposts: 0,
+      timestamp: new Date().toISOString(),
+      imageUrls: Array.from(new Set(imageUrls)),
+      url: rootUrl,
+      source: 'manual',
+      fetchedAt: new Date().toISOString()
+    };
+  }, postUrl);
 }
 
 async function isLoginRequired(page: Page) {
@@ -248,20 +296,25 @@ async function attachTopReplies(page: Page, posts: ThreadsPost[]) {
   const candidates = posts.filter((post) => post.replies >= 10).slice(0, 8);
   const replyMap = new Map<string, ThreadsReply[]>();
   for (const post of candidates) {
-    const replies = await fetchTopReplies(page, post.url).catch(() => []);
+    const replies = await fetchTopReplies(page, post.url, post).catch(() => []);
     replyMap.set(post.id, replies);
     await page.waitForTimeout(650);
   }
 
   return posts.map((post) => {
     const refreshed = replyMap.get(post.id);
-    const next = { ...post, topReplies: refreshed?.length ? refreshed : filterUsefulReplies(post.topReplies) };
+    const topReplies = filterUsefulReplies(refreshed?.length ? refreshed : post.topReplies, post);
+    const next = { ...post, topReplies };
     const score = scorePost(next);
     return { ...next, trendingScore: score.score, affiliateFitScore: score.affiliateFitScore, opportunityScore: score.opportunityScore, velocityScore: score.velocityScore, emotionalCategory: score.emotionalCategory, videoPotentialScore: score.videoPotentialScore, engagementScore: score.engagementScore };
   });
 }
 
-async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsReply[]> {
+async function fetchTopReplies(
+  page: Page,
+  postUrl: string,
+  context?: Pick<ThreadsPost, 'author' | 'authorHandle' | 'content'>
+): Promise<ThreadsReply[]> {
   await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login first.');
   // Threads hydrates the permalink and its ranked replies asynchronously.
@@ -273,8 +326,13 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
     const anchors = Array.from(document.querySelectorAll('a'))
       .map((anchor) => anchor as HTMLAnchorElement)
       .filter((anchor) => /\/@[A-Za-z0-9._]+\/post\/[A-Za-z0-9_-]+/.test(anchor.href));
+    const rootAuthor = rootUrl.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1]?.toLocaleLowerCase() ?? '';
+    const rootTimestamp = anchors
+      .find((anchor) => anchor.href.includes(`/post/${rootId}`) && anchor.querySelector('time[datetime]'))
+      ?.querySelector('time[datetime]')?.getAttribute('datetime');
     const seen = new Set<string>();
     const replies: ThreadsReply[] = [];
+    const threadContinuations: ThreadsReply[] = [];
 
     for (const anchor of anchors) {
       const match = anchor.href.match(/\/@([A-Za-z0-9._]+)\/post\/([A-Za-z0-9_-]+)/);
@@ -318,6 +376,17 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
         .replace(/^\s*[·•.]\s*(?:author|tác\s+giả)\s*[:·•.\-–—]?\s*/iu, '')
         .trim();
       if (!isUsefulContent(content)) continue;
+      // Capture the segment badge before truncating long reply content. These
+      // optional fields survive persistence inside the top_replies JSON.
+      const segmentMatch = content.match(/(?:^|\s)(\d{1,2})\s*\/\s*(\d{1,2})\s*[.)\]]?\s*$/u);
+      const segmentIndex = segmentMatch ? Number(segmentMatch[1]) : undefined;
+      const segmentTotal = segmentMatch ? Number(segmentMatch[2]) : undefined;
+      const hasValidSegment = Number.isInteger(segmentIndex)
+        && Number.isInteger(segmentTotal)
+        && segmentIndex! >= 1
+        && segmentTotal! >= 2
+        && segmentIndex! <= segmentTotal!
+        && segmentTotal! <= 99;
       const lineMetrics = lines.slice(contentEnd).filter(isMetricLine).map(compactToNumber);
       const likes = Math.max(interactionMetric(container, ['like', 'thich']) ?? 0, lineMetrics[0] ?? 0);
       const replyCount = maxMetric(interactionMetric(container, ['reply', 'comment', 'tra loi', 'binh luan']), lineMetrics[1]);
@@ -325,21 +394,40 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
       const shares = maxMetric(interactionMetric(container, ['share', 'send', 'chia se', 'gui']), lineMetrics[3]);
       const authorAvatarUrl = findAuthorAvatar(container, match[1]);
       const mediaUrls = findReplyMedia(container, authorAvatarUrl);
+      const replyTimestamp = container.querySelector('time[datetime]')?.getAttribute('datetime');
+      const isThreadContinuation = Boolean(
+        rootTimestamp
+          && replyTimestamp === rootTimestamp
+          && match[1].toLocaleLowerCase() === rootAuthor
+      );
       seen.add(match[2]);
-      replies.push({
+      const reply: ThreadsReply = {
         id: match[2],
         author: match[1],
         ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
         ...(mediaUrls.length ? { mediaUrls } : {}),
         content: content.slice(0, 500),
         likes,
+        ...(hasValidSegment ? { segmentIndex, segmentTotal } : {}),
         ...(replyCount === undefined ? {} : { replies: replyCount }),
         ...(reposts === undefined ? {} : { reposts }),
         ...(shares === undefined ? {} : { shares })
-      });
+      };
+      replies.push(reply);
+      if (isThreadContinuation) threadContinuations.push(reply);
       if (replies.length >= 20) break;
     }
-    return replies.sort((a, b) => b.likes - a.likes);
+
+    // Threads can render the 1/N badge visually without exposing it through
+    // textContent/innerText. Self-thread posts do share the root's exact
+    // timestamp, however, while ordinary replies have their own timestamp.
+    // Their DOM order is the intended reading order.
+    const inferredTotal = threadContinuations.length + 1;
+    threadContinuations.forEach((reply, index) => {
+      reply.segmentIndex ??= index + 2;
+      reply.segmentTotal ??= inferredTotal;
+    });
+    return replies;
 
     function findAuthorAvatar(container: HTMLElement, author: string) {
       const images = Array.from(container.querySelectorAll('img[src]')) as HTMLImageElement[];
@@ -425,6 +513,7 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
     }
 
     function isAuthorLabel(value: string) {
+      if (/^(?:\u00b7|\u2022|\.)$/u.test(value.trim())) return true;
       return /^(?:author|tác\s+giả)$/iu.test(value) || /^[·•.]\s*(?:author|tác\s+giả)$/iu.test(value);
     }
 
@@ -454,7 +543,7 @@ async function fetchTopReplies(page: Page, postUrl: string): Promise<ThreadsRepl
     await page.mouse.wheel(0, 900);
     await page.waitForTimeout(450);
   }
-  const sorted = Array.from(collected.values()).sort((left, right) => right.likes - left.likes).slice(0, 20);
+  const sorted = filterUsefulReplies(Array.from(collected.values()), context).slice(0, 20);
   return await embedReplyAvatars(page, sorted);
 
   function maxKnownMetric(left?: number, right?: number) {
@@ -502,13 +591,16 @@ async function embedReplyAvatars(page: Page, replies: ThreadsReply[]): Promise<T
   }));
 }
 
-export async function scrapeThreadsPostReplies(postUrl: string): Promise<ThreadsReply[]> {
-  const context = await createThreadsContext(true);
+export async function scrapeThreadsPostReplies(
+  postUrl: string,
+  threadContext?: Pick<ThreadsPost, 'author' | 'authorHandle' | 'content'>
+): Promise<ThreadsReply[]> {
+  const browserContext = await createThreadsContext(true);
   try {
-    const page = await context.newPage();
-    return await fetchTopReplies(page, postUrl);
+    const page = await browserContext.newPage();
+    return await fetchTopReplies(page, postUrl, threadContext);
   } finally {
-    await context.close();
+    await browserContext.close();
   }
 }
 
@@ -654,7 +746,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
 
           const metricLines = translateIndex > -1 ? lines.slice(translateIndex + 1) : [];
           const metrics = metricLines
-            .filter((line) => /^\d+(\.\d+)?[KMB]?$/i.test(line))
+            .filter((line) => /^\d+(?:[.,]\d+)?[KMB]?$/i.test(line))
             .map(compactToNumber)
             .filter((value) => value >= 0)
             .slice(-4);
@@ -681,10 +773,14 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
       }
 
       function findPostContainer(anchor: HTMLAnchorElement, author: string) {
+        const pressable = anchor.closest<HTMLElement>('[data-pressable-container="true"], article, [role="article"]');
+        if (pressable && pressable.innerText.length >= 40 && pressable.innerText.includes(author)) return pressable;
+
         let current: HTMLElement | null = anchor;
         for (let depth = 0; current && depth < 14; depth += 1) {
           const text = current.innerText;
-          if (text.length >= 40 && text.length <= 1800 && text.includes(author) && /translate/i.test(text)) return current;
+          const hasPostTime = text.split('\n').some((line) => isDateLine(line.trim()));
+          if (text.length >= 40 && text.length <= 2600 && text.includes(author) && hasPostTime) return current;
           current = current.parentElement;
         }
         return null;
@@ -723,7 +819,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
       }
 
       function compactToNumber(value: string) {
-        const cleaned = value.replace(/\s+/g, '').toUpperCase();
+        const cleaned = value.replace(/\s+/g, '').replace(',', '.').toUpperCase();
         const number = Number.parseFloat(cleaned);
         if (!Number.isFinite(number)) return 0;
         if (cleaned.endsWith('B')) return Math.round(number * 1_000_000_000);
@@ -741,12 +837,12 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
           return new Date(year, month, day).toISOString();
         }
 
-        const match = text.match(/\b(\d+)([smhdw])\b/i);
+        const match = text.trim().match(/^(\d+)\s*(s|sec(?:ond)?s?|giây|m|min(?:ute)?s?|phút|h|hr|hours?|giờ|d|days?|ngày|w|weeks?|tuần)$/i);
         if (!match) return now;
         const amount = Number(match[1]);
-        const unit = match[2].toLowerCase();
+        const unit = normalizeRelativeUnit(match[2]);
         const multipliers: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
-        return new Date(Date.now() - amount * (multipliers[unit] ?? 0)).toISOString();
+        return new Date(Date.now() - amount * multipliers[unit]).toISOString();
       }
 
       function stableId(url: string, text: string) {
@@ -782,7 +878,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
 
           const metricLines = translateIndex > -1 ? lines.slice(translateIndex + 1, nextDateIndex) : [];
           const metrics = metricLines
-            .filter((line) => /^\d+(\.\d+)?[KMB]?$/i.test(line))
+            .filter((line) => /^\d+(?:[.,]\d+)?[KMB]?$/i.test(line))
             .map(compactToNumber)
             .filter((value) => value > 0);
 
@@ -832,7 +928,17 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
       }
 
       function isDateLine(line: string) {
-        return /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line) || /^\d+[smhdw]$/.test(line);
+        return /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line)
+          || /^\d+\s*(?:s|sec(?:ond)?s?|giây|m|min(?:ute)?s?|phút|h|hr|hours?|giờ|d|days?|ngày|w|weeks?|tuần)$/i.test(line);
+      }
+
+      function normalizeRelativeUnit(unit: string) {
+        const normalized = unit.toLocaleLowerCase('vi');
+        if (/^(?:s|sec|second|giây)/.test(normalized)) return 's';
+        if (/^(?:m|min|minute|phút)/.test(normalized)) return 'm';
+        if (/^(?:h|hr|hour|giờ)/.test(normalized)) return 'h';
+        if (/^(?:d|day|ngày)/.test(normalized)) return 'd';
+        return 'w';
       }
 
       function findAuthorIndex(lines: string[], dateIndex: number) {
@@ -851,7 +957,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
 
       function findTranslateIndex(lines: string[], start: number, end: number) {
         for (let index = start; index < end; index += 1) {
-          if (/^translate$/i.test(lines[index])) return index;
+          if (/^(?:translate|see translation|dịch|xem bản dịch)$/i.test(lines[index])) return index;
         }
         return -1;
       }
@@ -875,22 +981,36 @@ async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPos
     const author = rootUrl.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1];
     if (!postId || !author) return null;
 
-    const candidates = Array.from(document.querySelectorAll<HTMLElement>('[data-pressable-container="true"]'));
-    const container = candidates.find((item) =>
-      Array.from(item.querySelectorAll<HTMLAnchorElement>('a')).some((anchor) => anchor.href.includes(`/post/${postId}`))
-    );
+    const permalink = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
+      .find((anchor) => anchor.href.includes(`/post/${postId}`));
+    let container: HTMLElement | null = null;
+    let current: HTMLElement | null = permalink ?? null;
+    for (let depth = 0; current && depth < 16; depth += 1) {
+      const postIds = new Set(
+        Array.from(current.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
+          .map((anchor) => anchor.href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
+          .filter(Boolean)
+      );
+      const text = current.innerText?.trim() ?? '';
+      const hasActions = Boolean(current.querySelector('svg[aria-label="Like"]'));
+      // Pick the complete root card (text + actions + media), but stop before
+      // the ancestor grows into the replies/conversation container.
+      if (text.length >= 20 && text.length <= 3000 && hasActions && postIds.size === 1) container = current;
+      if (postIds.size > 1 && container) break;
+      current = current.parentElement;
+    }
     if (!container) return null;
 
     const lines = container.innerText.split('\n').map((line) => line.trim()).filter(Boolean);
-    const dateIndex = lines.findIndex((line) => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line) || /^\d+[smhdw]$/i.test(line));
-    const translateIndex = lines.findIndex((line, index) => index > dateIndex && /^translate$/i.test(line));
+    const dateIndex = lines.findIndex(isDateLine);
+    const translateIndex = lines.findIndex((line, index) => index > dateIndex && /^(?:translate|see translation|dịch|xem bản dịch)$/i.test(line));
     const contentEnd = translateIndex > dateIndex ? translateIndex : lines.length;
     const content = lines.slice(Math.max(dateIndex + 1, 0), contentEnd).join('\n').trim();
     if (content.length < 4) return null;
 
     const metrics = lines
       .slice(translateIndex > -1 ? translateIndex + 1 : contentEnd)
-      .filter((line) => /^\d+(?:\.\d+)?[KMB]?$/i.test(line))
+      .filter((line) => /^\d+(?:[.,]\d+)?[KMB]?$/i.test(line))
       .map(compactToNumber)
       .slice(-4);
 
@@ -903,14 +1023,32 @@ async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPos
       replies: metrics[1] ?? 0,
       reposts: metrics[2] ?? 0,
       timestamp: parseTimestamp(lines[dateIndex] ?? ''),
-      imageUrls: Array.from(new Set(Array.from(container.querySelectorAll<HTMLImageElement>('img')).map((image) => image.currentSrc || image.src).filter(Boolean))),
+      imageUrls: extractMediaUrls(container),
       url: rootUrl,
       source: 'manual',
       fetchedAt: now
     };
 
+    function extractMediaUrls(root: HTMLElement) {
+      const urls: string[] = [];
+      for (const image of Array.from(root.querySelectorAll<HTMLImageElement>('img[src], img[srcset]'))) {
+        const url = image.currentSrc || image.src;
+        const alt = (image.alt ?? '').toLowerCase();
+        const rect = image.getBoundingClientRect();
+        const width = Math.max(image.naturalWidth, rect.width, Number(image.getAttribute('width')) || 0);
+        const height = Math.max(image.naturalHeight, rect.height, Number(image.getAttribute('height')) || 0);
+        if (!url || alt.includes('profile picture') || /\/v\/t[^/]+-19\//i.test(url)) continue;
+        if (width < 140 || height < 100) continue;
+        urls.push(url);
+      }
+      for (const video of Array.from(root.querySelectorAll<HTMLVideoElement>('video[poster]'))) {
+        if (video.poster) urls.push(video.poster);
+      }
+      return Array.from(new Set(urls)).slice(0, 10);
+    }
+
     function compactToNumber(value: string) {
-      const cleaned = value.toUpperCase();
+      const cleaned = value.replace(/\s+/g, '').replace(',', '.').toUpperCase();
       const number = Number.parseFloat(cleaned);
       if (!Number.isFinite(number)) return 0;
       if (cleaned.endsWith('B')) return Math.round(number * 1_000_000_000);
@@ -927,10 +1065,24 @@ async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPos
         const year = Number(absoluteDate[3]) + (absoluteDate[3].length === 2 ? 2000 : 0);
         return new Date(year, month, day).toISOString();
       }
-      const relative = value.match(/^(\d+)([smhdw])$/i);
+      const relative = value.match(/^(\d+)\s*(s|sec(?:ond)?s?|giây|m|min(?:ute)?s?|phút|h|hr|hours?|giờ|d|days?|ngày|w|weeks?|tuần)$/i);
       if (!relative) return now;
       const multipliers: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
-      return new Date(Date.now() - Number(relative[1]) * (multipliers[relative[2].toLowerCase()] ?? 0)).toISOString();
+      return new Date(Date.now() - Number(relative[1]) * multipliers[normalizeRelativeUnit(relative[2])]).toISOString();
+    }
+
+    function isDateLine(line: string) {
+      return /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line)
+        || /^\d+\s*(?:s|sec(?:ond)?s?|giây|m|min(?:ute)?s?|phút|h|hr|hours?|giờ|d|days?|ngày|w|weeks?|tuần)$/i.test(line);
+    }
+
+    function normalizeRelativeUnit(unit: string) {
+      const normalized = unit.toLocaleLowerCase('vi');
+      if (/^(?:s|sec|second|giây)/.test(normalized)) return 's';
+      if (/^(?:m|min|minute|phút)/.test(normalized)) return 'm';
+      if (/^(?:h|hr|hour|giờ)/.test(normalized)) return 'h';
+      if (/^(?:d|day|ngày)/.test(normalized)) return 'd';
+      return 'w';
     }
   }, postUrl);
 }
