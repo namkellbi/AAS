@@ -24,6 +24,14 @@ import { getDefaultVoiceForProvider, getTtsModel, getTtsVoiceOptions, isTtsVoice
 import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, CreateFromLinkProgress, FetchMode, GeneratedVideoItem, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, LocalTtsStatus, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, ThreadsPost, TtsProvider, TtsSegmentKind, TtsVoice, UpdateSettingsRequest, UploadLogEntry, UsageSummary, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
+type VideoRenderSession = {
+  postId: string;
+  renderSessionId: string | null;
+  rendering: boolean;
+  progress: VideoDraftProgress | null;
+  renderedVideoPath: string | null;
+};
+
 export default function HomePage() {
   const [activeView, setActiveView] = useState('home');
   const [posts, setPosts] = useState<ThreadsPost[]>([]);
@@ -48,9 +56,7 @@ export default function HomePage() {
   const [isScanning, setIsScanning] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [briefPostId, setBriefPostId] = useState<string | null>(null);
-  const [isRenderingVideo, setIsRenderingVideo] = useState(false);
-  const [videoRenderProgress, setVideoRenderProgress] = useState<VideoDraftProgress | null>(null);
-  const [renderedVideoPath, setRenderedVideoPath] = useState<string | null>(null);
+  const [videoRenderSession, setVideoRenderSession] = useState<VideoRenderSession | null>(null);
   const [assets, setAssets] = useState<AssetLibraryItem[]>([]);
   const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideoItem[]>([]);
   const [uploadLogs, setUploadLogs] = useState<UploadLogEntry[]>([]);
@@ -63,6 +69,8 @@ export default function HomePage() {
   const [newKeyword, setNewKeyword] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const scannedOnLaunch = useRef(false);
+  const activeVideoRenderSessionId = useRef<string | null>(null);
+  const videoRenderSequence = useRef(0);
   const language = settings?.language ?? 'en';
   const copy = translations[language];
   const featureVisibility = settings?.featureVisibility ?? defaultFeatureVisibility;
@@ -98,6 +106,8 @@ export default function HomePage() {
   const selectedAnalysis = selectedPost ? analysis[selectedPost.id] : null;
   const briefPost = briefPostId ? posts.find((post) => post.id === briefPostId) : undefined;
   const briefAnalysis = briefPost ? analysis[briefPost.id] : undefined;
+  const briefVideoRenderSession = briefPost && videoRenderSession?.postId === briefPost.id ? videoRenderSession : null;
+  const briefRenderedVideoPath = briefVideoRenderSession?.renderedVideoPath ?? null;
   const savedIds = useMemo(() => new Set(savedPosts.map((item) => item.postId)), [savedPosts]);
   const activeKeywords = keywords.filter((keyword) => keyword.enabled);
   const shouldShowFeedTools = featureVisibility.opportunityDiscovery && (activeView === 'trending' || activeView === 'saved');
@@ -237,7 +247,13 @@ export default function HomePage() {
   useEffect(() => {
     const api = window.desktopAPI;
     if (!api) return;
-    return api.onVideoDraftProgress(setVideoRenderProgress);
+    return api.onVideoDraftProgress((progress) => {
+      const renderSessionId = progress.renderSessionId;
+      if (!renderSessionId || renderSessionId !== activeVideoRenderSessionId.current) return;
+      setVideoRenderSession((current) => current?.renderSessionId === renderSessionId
+        ? { ...current, progress }
+        : current);
+    });
   }, []);
 
   useEffect(() => {
@@ -337,7 +353,27 @@ export default function HomePage() {
 
     const current = analysis[post.id];
     const result = current?.scriptOutline.length && current.productSearchKeywords.length ? current : await handleAnalyze(postWithFreshReplies);
-    if (result) setBriefPostId(post.id);
+    if (result) openVideoBrief(post.id);
+  }
+
+  function openVideoBrief(postId: string, initialBackgroundPath?: string) {
+    activeVideoRenderSessionId.current = null;
+    setVideoRenderSession({
+      postId,
+      renderSessionId: null,
+      rendering: false,
+      progress: null,
+      renderedVideoPath: null
+    });
+    setBriefInitialBackground(initialBackgroundPath);
+    setBriefPostId(postId);
+  }
+
+  function closeVideoBrief() {
+    activeVideoRenderSessionId.current = null;
+    setVideoRenderSession(null);
+    setBriefPostId(null);
+    setBriefInitialBackground(undefined);
   }
 
   async function importPostFromLink() {
@@ -399,8 +435,7 @@ export default function HomePage() {
       setAnalysis((current) => ({ ...current, [result.post.id]: result.analysis }));
       setSelectedId(result.post.id);
       setCreateLinkUrl('');
-      setBriefInitialBackground(result.backgroundPath);
-      setBriefPostId(result.post.id);
+      openVideoBrief(result.post.id, result.backgroundPath);
       await refreshUsageSummary();
       showHealth({ ok: true, message: copy.createFromLinkReady });
     } catch (createError) {
@@ -419,21 +454,38 @@ export default function HomePage() {
       return;
     }
 
-    setIsRenderingVideo(true);
-    setVideoRenderProgress({ percent: 1, message: copy.videoDraftFilePickerHelp });
-    setRenderedVideoPath(null);
+    const renderPost = briefPost;
+    const renderAnalysis = briefAnalysis;
+    const renderSessionId = `${renderPost.id}:${++videoRenderSequence.current}`;
+    activeVideoRenderSessionId.current = renderSessionId;
+    setVideoRenderSession({
+      postId: renderPost.id,
+      renderSessionId,
+      rendering: true,
+      progress: { percent: 1, message: copy.videoDraftFilePickerHelp, renderSessionId },
+      renderedVideoPath: null
+    });
     setError(null);
     try {
-      const result = await api.renderVideoDraft({ post: briefPost, analysis: briefAnalysis, ...overrides });
-      if (result.filePath) setRenderedVideoPath(result.filePath);
+      const result = await api.renderVideoDraft({ post: renderPost, analysis: renderAnalysis, ...overrides, renderSessionId });
+      setVideoRenderSession((current) => current?.renderSessionId === renderSessionId
+        ? { ...current, renderedVideoPath: result.filePath ?? null }
+        : current);
       setGeneratedVideos(await api.getGeneratedVideos());
-      showHealth({ ok: result.ok, message: result.ok ? copy.videoDraftReady : result.message });
+      if (activeVideoRenderSessionId.current === renderSessionId) {
+        showHealth({ ok: result.ok, message: result.ok ? copy.videoDraftReady : result.message });
+      }
     } catch (renderError) {
-      setError(renderError instanceof Error ? renderError.message : String(renderError));
+      if (activeVideoRenderSessionId.current === renderSessionId) {
+        setError(renderError instanceof Error ? renderError.message : String(renderError));
+      }
     } finally {
       await refreshSettings();
       await refreshUsageSummary();
-      setIsRenderingVideo(false);
+      if (activeVideoRenderSessionId.current === renderSessionId) activeVideoRenderSessionId.current = null;
+      setVideoRenderSession((current) => current?.renderSessionId === renderSessionId
+        ? { ...current, rendering: false }
+        : current);
     }
   }
 
@@ -448,8 +500,8 @@ export default function HomePage() {
   }
 
   async function handleOpenVideoOutputFolder() {
-    if (!renderedVideoPath) return;
-    const result = await window.desktopAPI?.openVideoOutputFolder(renderedVideoPath);
+    if (!briefRenderedVideoPath) return;
+    const result = await window.desktopAPI?.openVideoOutputFolder(briefRenderedVideoPath);
     if (result && !result.ok) showHealth(result);
   }
 
@@ -599,8 +651,14 @@ export default function HomePage() {
   }
 
   async function loginThreads() {
-    await window.desktopAPI?.openThreadsLogin();
-    await checkThreadsSession();
+    try {
+      await window.desktopAPI?.openThreadsLogin();
+      await checkThreadsSession();
+    } catch (loginError) {
+      const message = loginError instanceof Error ? loginError.message : String(loginError);
+      setError(message);
+      showHealth({ ok: false, message });
+    }
   }
 
   function changeView(view: string) {
@@ -875,6 +933,7 @@ export default function HomePage() {
 
       {briefPost && briefAnalysis ? (
         <TikTokBriefModal
+          key={briefPost.id}
           analysis={briefAnalysis}
           assets={assets}
           copy={copy}
@@ -886,19 +945,16 @@ export default function HomePage() {
           ttsProvider={settings?.ttsProvider ?? 'openai'}
           ttsSpeed={settings?.defaultSpeed ?? 1.1}
           ttsVoice={settings?.defaultVoice ?? 'nova'}
-          renderProgress={videoRenderProgress}
-          renderedVideoPath={renderedVideoPath}
-          videoApproved={Boolean(generatedVideos.find((video) => video.filePath === renderedVideoPath)?.reviewStatus === 'approved')}
-          renderingVideo={isRenderingVideo}
-          onClose={() => {
-            setBriefPostId(null);
-            setBriefInitialBackground(undefined);
-          }}
+          renderProgress={briefVideoRenderSession?.progress}
+          renderedVideoPath={briefRenderedVideoPath}
+          videoApproved={Boolean(generatedVideos.find((video) => video.filePath === briefRenderedVideoPath)?.reviewStatus === 'approved')}
+          renderingVideo={briefVideoRenderSession?.rendering ?? false}
+          onClose={closeVideoBrief}
           onOpenLink={() => openPostLink(briefPost)}
           onOpenOutputFolder={handleOpenVideoOutputFolder}
           onSetApproved={async (approved) => {
-            if (!renderedVideoPath) return;
-            const updated = await window.desktopAPI?.setGeneratedVideoApproved(renderedVideoPath, approved);
+            if (!briefRenderedVideoPath) return;
+            const updated = await window.desktopAPI?.setGeneratedVideoApproved(briefRenderedVideoPath, approved);
             if (updated) setGeneratedVideos(updated);
           }}
           onRenderVideo={handleRenderVideoDraft}

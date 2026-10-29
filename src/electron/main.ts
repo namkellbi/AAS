@@ -50,7 +50,7 @@ import { createTtsPreview, testGeminiConnection } from '@/server/video/ttsServic
 import { normalizeVietnameseSpeechBatch } from '@/server/video/speechNormalizationService';
 import { getVieneuLocalStatus, stopVieneuLocalService } from '@/server/video/vieneuLocalService';
 import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, markGeneratedVideoPublished, registerAsset, setGeneratedVideoApproved, setGeneratedVideoPublishState } from '@/server/services/assetLibraryService';
-import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, ManualPublishRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftRequest } from '@/lib/types';
+import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, ManualPublishRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
 import { isTtsVoiceForProvider } from '@/lib/tts';
 import { normalizeTikTokCaption } from '@/lib/tiktokCaption';
 
@@ -196,11 +196,14 @@ function registerIpc() {
     return { ok: true, message: 'Opening Threads post.' };
   });
   ipcMain.handle('video:render-draft', async (_event, request: VideoDraftRequest) => {
-    const sendProgress = (percent: number, message: string) => _event.sender.send('video:render-progress', { percent, message });
-    sendProgress(5, 'Chọn clip nền retention...');
+    const sendProgress = (progress: VideoDraftProgress) => _event.sender.send('video:render-progress', {
+      ...progress,
+      renderSessionId: request.renderSessionId
+    });
+    sendProgress({ percent: 5, message: 'Chọn clip nền retention...' });
     const backgroundPath = request.backgroundPath || await pickVideoFile('Select an authorized retention background clip');
     if (!backgroundPath) return { ok: false, message: 'Video draft cancelled before selecting the background clip.' };
-    sendProgress(12, 'Chuẩn bị clip demo sản phẩm nếu có...');
+    sendProgress({ percent: 12, message: 'Chuẩn bị clip demo sản phẩm nếu có...' });
     const matchedProduct = request.analysis.matchedProductId ? getProduct(request.analysis.matchedProductId) : null;
     let demoPath = request.productClipPath;
     if (demoPath === undefined && matchedProduct?.demoAssetId) {
@@ -208,7 +211,7 @@ function registerIpc() {
       if (demoAsset) demoPath = demoAsset.filePath;
     }
 
-    const result = await renderVideoDraft({ ...request, backgroundPath, demoPath, product: matchedProduct ?? undefined }, (progress) => _event.sender.send('video:render-progress', progress));
+    const result = await renderVideoDraft({ ...request, backgroundPath, demoPath, product: matchedProduct ?? undefined }, sendProgress);
     markAssetUsed(backgroundPath);
     markAssetUsed(demoPath);
     return result;

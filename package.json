@@ -9,6 +9,7 @@
     "build": "next build && tsup src/electron/main.ts src/electron/preload.ts --format cjs --platform node --out-dir dist/electron --external electron --external better-sqlite3 --external playwright --external openai",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "test:tiktok-caption": "tsx --test src/lib/tiktokCaption.test.ts",
     "lint": "next lint",
     "db:init": "npm rebuild better-sqlite3 && tsx src/server/db/init.ts && npm run electron:rebuild",

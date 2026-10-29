@@ -341,6 +341,7 @@ export type VideoDraftVariant = {
 };
 
 export type VideoDraftRequest = {
+  renderSessionId?: string;
   post: ThreadsPost;
   analysis: AIAnalysis;
   selectedReplies?: SelectedReply[];
@@ -366,6 +367,7 @@ export type VideoDraftResult = ServiceHealth & {
 export type VideoDraftProgress = {
   percent: number;
   message: string;
+  renderSessionId?: string;
 };
 
 export type TtsPreviewRequest = {

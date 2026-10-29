@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { firstThreadsPostImageUrl } from '@/lib/threadsMedia';
 import { normalizeVietnameseForSpeech } from '@/lib/vietnamese-speech';
 import { getTtsModel } from '@/lib/tts';
 import type { AIAnalysis, Product, SelectedReply, ThreadsPost, TtsProvider, TtsSegmentKind, TtsVoice, VideoDraftProgress, VideoDraftResult, VideoDraftVariant } from '@/lib/types';
@@ -342,7 +343,7 @@ async function renderPostCard(post: ThreadsPost, text: string, outputPath: strin
     likes: post.likes,
     replies: post.replies,
     reposts: post.reposts
-  }, false, undefined, post.imageUrls[0]));
+  }, false, undefined, firstThreadsPostImageUrl(post.imageUrls)));
 }
 
 async function renderReplyCard(reply: SelectedReply, outputPath: string) {

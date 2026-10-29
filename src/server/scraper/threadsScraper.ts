@@ -2,12 +2,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { filterUsefulReplies } from '@/lib/replies';
+import { sanitizeThreadsMediaCandidates, sanitizeThreadsPostImageUrls, type ThreadsMediaCandidate } from '@/lib/threadsMedia';
 import type { FetchRequest, ThreadsPost, ThreadsReply, TrendState } from '@/lib/types';
 import { nowIso } from '@/lib/utils';
 import { getConfig } from '@/server/config';
 import { scorePost } from '@/server/scoring/trendingScore';
+import {
+  hasThreadsAuthCookie,
+  isGenericThreadsContent,
+  isGenericThreadsLoginMetadata,
+  isInvalidThreadsPostRedirect,
+  isThreadsLoginUrl,
+  threadsUrlHasPostId,
+  type ThreadsCookieLike
+} from '@/server/scraper/threadsAccess';
 
 type RawPost = Omit<ThreadsPost, 'trendingScore' | 'affiliateFitScore' | 'opportunityScore' | 'velocityScore' | 'engagementGrowthPercent' | 'emotionalCategory' | 'topReplies' | 'trendState' | 'likesPerHour' | 'repliesPerHour' | 'videoPotentialScore' | 'engagementScore'>;
+type RawPostWithMediaCandidates = Omit<RawPost, 'imageUrls'> & { mediaCandidates: ThreadsMediaCandidate[] };
+
+type ThreadsAccessErrorCode = 'login_required' | 'post_unavailable' | 'unexpected_page';
+
+class ThreadsAccessError extends Error {
+  constructor(readonly code: ThreadsAccessErrorCode, message: string) {
+    super(message);
+    this.name = 'ThreadsAccessError';
+  }
+}
 
 export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsPost[]> {
   const config = getConfig();
@@ -17,10 +37,11 @@ export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsP
   const context = await createThreadsContext(true);
 
   try {
+    await requireThreadsAuthentication(context, 'fetching Threads posts');
     const page = await context.newPage();
     await page.goto(urlForRequest(request), { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await acceptNonBlockingDialogs(page);
-    if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login before fetching.');
+    if (await isLoginRequired(page)) throw loginRequiredError('fetching Threads posts');
     await page.waitForTimeout(config.scraperMinDelayMs);
     await page.locator('a[href*="/post/"]').first().waitFor({ state: 'attached', timeout: 5000 }).catch(() => undefined);
     await page.waitForTimeout(1200);
@@ -43,24 +64,22 @@ export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPos
   const context = await createThreadsContext(true);
 
   try {
+    await requireThreadsAuthentication(context, 'importing a Threads post');
     const page = await context.newPage();
     await page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await acceptNonBlockingDialogs(page);
-    if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login before importing a post.');
+    if (await isLoginRequired(page)) throw loginRequiredError('importing a Threads post');
     await page.waitForTimeout(config.scraperMinDelayMs);
     await page.locator(`a[href*="/post/${postId}"]`).first().waitFor({ state: 'attached', timeout: 5000 }).catch(() => undefined);
     await page.waitForTimeout(1200);
+    await assertExpectedThreadsPostPage(page, normalizedUrl);
 
     const request: FetchRequest = { mode: 'manual', query: normalizedUrl, maxPosts: 1 };
     const rawPosts = await extractVisiblePosts(page, request);
     const visiblePost = rawPosts.find((post) => isSameThreadsPostUrl(post.url, normalizedUrl) || post.id === postId);
     const permalinkPost = await extractPermalinkPost(page, normalizedUrl);
-    const rawPost = visiblePost
-      ? {
-        ...visiblePost,
-        imageUrls: Array.from(new Set([...(visiblePost.imageUrls ?? []), ...(permalinkPost?.imageUrls ?? [])]))
-      }
-      : permalinkPost ?? await extractMetadataPost(page, normalizedUrl);
+    const metadataPost = permalinkPost || visiblePost ? null : await extractMetadataPost(page, normalizedUrl);
+    const rawPost = permalinkPost ?? visiblePost ?? metadataPost;
     if (!rawPost || !isUsablePost(rawPost)) {
       const diagnostic = await page.evaluate(() => ({
         title: document.title,
@@ -75,47 +94,73 @@ export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPos
       );
     }
 
-    const topReplies = filterUsefulReplies(await fetchTopReplies(page, normalizedUrl, rawPost).catch(() => []), rawPost);
+    let fetchedReplies: ThreadsReply[] = [];
+    try {
+      fetchedReplies = await fetchTopReplies(page, normalizedUrl, rawPost);
+    } catch (error) {
+      if (error instanceof ThreadsAccessError) throw error;
+    }
+    const topReplies = filterUsefulReplies(fetchedReplies, rawPost);
     await context.storageState({ path: config.threadsStorageState });
-    return scoreRawPost({ ...rawPost, id: postId, url: normalizedUrl, source: 'manual', keyword: undefined }, topReplies);
+    return scoreRawPost({
+      ...rawPost,
+      id: postId,
+      imageUrls: sanitizeThreadsPostImageUrls(rawPost.imageUrls),
+      url: normalizedUrl,
+      source: 'manual',
+      keyword: undefined
+    }, topReplies);
   } finally {
     await context.close();
   }
 }
 
 async function extractMetadataPost(page: Page, postUrl: string): Promise<RawPost | null> {
-  return page.evaluate((rootUrl) => {
-    const postId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0];
-    const handle = rootUrl.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1];
+  const metadata = await page.evaluate(() => {
     const description = document.querySelector<HTMLMetaElement>('meta[property="og:description"]')?.content?.trim()
       || document.querySelector<HTMLMetaElement>('meta[name="description"]')?.content?.trim();
-    if (!postId || !handle || !description || /^this content is unavailable$/i.test(description)) return null;
-
     const title = document.querySelector<HTMLMetaElement>('meta[property="og:title"]')?.content?.trim() ?? '';
-    const displayName = title.match(/^(.*?)\s*\(@[^)]+\)\s+on Threads$/i)?.[1]?.trim();
     const imageUrls = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[property="og:image"], meta[name="twitter:image"]'))
       .map((meta) => meta.content?.trim())
       .filter((url): url is string => Boolean(url));
+    const canonicalUrls = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="canonical"]'))
+      .map((link) => link.href?.trim())
+      .concat(
+        Array.from(document.querySelectorAll<HTMLMetaElement>('meta[property="og:url"]'))
+          .map((meta) => meta.content?.trim())
+      )
+      .filter((url): url is string => Boolean(url));
+    return { description: description ?? '', title, imageUrls, canonicalUrls };
+  });
 
-    return {
-      id: postId,
-      author: displayName || handle,
-      authorHandle: `@${handle}`,
-      content: description.slice(0, 900),
-      likes: 0,
-      replies: 0,
-      reposts: 0,
-      timestamp: new Date().toISOString(),
-      imageUrls: Array.from(new Set(imageUrls)),
-      url: rootUrl,
-      source: 'manual',
-      fetchedAt: new Date().toISOString()
-    };
-  }, postUrl);
+  const postId = postUrl.split('/post/')[1]?.split(/[?#]/)[0];
+  const handle = postUrl.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1];
+  if (!postId || !handle || !metadata.description) return null;
+  if (!metadata.canonicalUrls.some((url) => threadsUrlHasPostId(url, postId))) return null;
+  if (isGenericThreadsLoginMetadata(metadata.title, metadata.description)) return null;
+
+  const displayName = metadata.title.match(/^(.*?)\s*\(@[^)]+\)\s+on Threads$/i)?.[1]?.trim();
+  const timestamp = nowIso();
+  return {
+    id: postId,
+    author: displayName || handle,
+    authorHandle: `@${handle}`,
+    content: metadata.description.slice(0, 900),
+    likes: 0,
+    replies: 0,
+    reposts: 0,
+    timestamp,
+    imageUrls: sanitizeThreadsMediaCandidates(
+      metadata.imageUrls.map((url) => ({ url, kind: 'metadata' }))
+    ),
+    url: postUrl,
+    source: 'manual',
+    fetchedAt: timestamp
+  };
 }
 
 async function isLoginRequired(page: Page) {
-  if (/\/login(?:\/|$)/i.test(new URL(page.url()).pathname)) return true;
+  if (isThreadsLoginUrl(page.url())) return true;
   return page.locator('input[type="password"]').first().isVisible().catch(() => false);
 }
 
@@ -123,81 +168,98 @@ export async function openThreadsLoginSession(): Promise<void> {
   const config = getConfig();
   fs.mkdirSync(path.dirname(config.threadsStorageState), { recursive: true });
   fs.mkdirSync(config.threadsProfileDir, { recursive: true });
+  clearThreadsAccountName();
 
   const context = await createThreadsContext(false);
-  const page = await context.newPage();
-  await page.goto('https://www.threads.net/login', { waitUntil: 'domcontentloaded' });
-  await page
-    .waitForURL((url) => url.hostname.endsWith('threads.net') && !url.pathname.includes('/login'), { timeout: 10 * 60_000 })
-    .catch(() => undefined);
-  await page.waitForTimeout(3000);
-  const accountName = await extractAccountNameFromPage(page).catch(() => undefined);
-  if (accountName) writeThreadsAccountName(accountName);
-  await context.storageState({ path: config.threadsStorageState });
-  await context.close();
+  try {
+    // Clicking Threads Login always starts a fresh authentication attempt.
+    // This also removes a server-revoked sessionid that may not be expired in
+    // the local cookie database yet.
+    await context.clearCookies({ name: /^sessionid$/i });
+    await context.storageState({ path: config.threadsStorageState });
+    const loginPage = await context.newPage();
+    await loginPage.goto('https://www.threads.com/login', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await waitForThreadsAuthentication(context, 10 * 60_000);
+
+    const page = loginPage.isClosed() ? await context.newPage() : loginPage;
+    await page.goto('https://www.threads.com/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.waitForTimeout(2500);
+    if (await isLoginRequired(page)) throw loginRequiredError('saving the Threads login');
+
+    const accountName = await extractAccountNameFromPage(page).catch(() => undefined);
+    if (accountName) writeThreadsAccountName(accountName);
+    await context.storageState({ path: config.threadsStorageState });
+  } finally {
+    await context.close().catch(() => undefined);
+  }
 }
 
 export async function getThreadsLoginStatus() {
   const config = getConfig();
-  if (!fs.existsSync(config.threadsStorageState) && !fs.existsSync(config.threadsProfileDir)) {
+  if (!fs.existsSync(config.threadsStorageState)) {
+    clearThreadsAccountName();
     return { ok: false, message: 'Threads profile/session is missing. Use Threads Login first.' };
   }
 
-  if (!fs.existsSync(config.threadsStorageState)) {
-    return { ok: true, message: 'Threads browser profile exists.' };
+  if (!hasStoredThreadsAuthSession()) {
+    clearThreadsAccountName();
+    return { ok: false, message: 'Threads session is expired or logged out. Use Threads Login again.' };
   }
 
-  const state = JSON.parse(fs.readFileSync(config.threadsStorageState, 'utf8')) as { cookies?: Array<{ name: string; domain: string }> };
-  const hasThreadsCookie = state.cookies?.some((cookie) => cookie.domain.includes('threads.net') || cookie.domain.includes('instagram.com'));
-  const accountName = await readThreadsAccountNameFromLiveProfile().catch(() => detectThreadsAccountName());
-  return hasThreadsCookie
-    ? { ok: true, message: accountName ? `Threads session exists for @${accountName}.` : 'Threads session exists.' }
-    : { ok: true, message: 'Threads browser profile exists. Login may still be required.' };
+  const accountName = detectThreadsAccountName();
+  return {
+    ok: true,
+    message: accountName ? `Threads session is authenticated for @${accountName}.` : 'Threads session is authenticated.'
+  };
+}
+
+export function hasStoredThreadsAuthSession() {
+  const config = getConfig();
+  if (!fs.existsSync(config.threadsStorageState)) return false;
+
+  try {
+    const state = JSON.parse(fs.readFileSync(config.threadsStorageState, 'utf8')) as { cookies?: ThreadsCookieLike[] };
+    return hasThreadsAuthCookie(state.cookies ?? []);
+  } catch {
+    return false;
+  }
 }
 
 export function detectThreadsAccountName(): string | undefined {
-  const config = getConfig();
+  if (!hasStoredThreadsAuthSession()) return undefined;
   const saved = readThreadsAccountName();
   if (saved) return saved;
 
   return undefined;
 }
 
-async function readThreadsAccountNameFromLiveProfile() {
-  const config = getConfig();
-  if (!fs.existsSync(config.threadsProfileDir)) return undefined;
-
-  const context = await createThreadsContext(true);
-  try {
-    const page = await context.newPage();
-    await page.goto('https://www.threads.com/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await page.waitForTimeout(2000);
-    const accountName = await extractAccountNameFromPage(page);
-    if (accountName) writeThreadsAccountName(accountName);
-    await context.storageState({ path: config.threadsStorageState });
-    return accountName;
-  } finally {
-    await context.close();
-  }
-}
-
 async function extractAccountNameFromPage(page: Page) {
-  const profileLink = page.getByRole('link', { name: /profile/i }).first();
-  if (await profileLink.isVisible().catch(() => false)) {
-    await profileLink.click().catch(() => undefined);
-    await page.waitForTimeout(2000);
+  const accountFromLink = await page.evaluate(() => {
+    const profileLabel = /^(?:profile|trang cá nhân)$/i;
+    for (const anchor of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+      const labels = [
+        anchor.getAttribute('aria-label') ?? '',
+        anchor.textContent ?? '',
+        ...Array.from(anchor.querySelectorAll<HTMLElement>('[aria-label]')).map((element) => element.getAttribute('aria-label') ?? '')
+      ];
+      if (!labels.some((label) => profileLabel.test(label.replace(/\s+/g, ' ').trim()))) continue;
+      const match = anchor.href.match(/threads\.(?:com|net)\/@([A-Za-z0-9._]+)\/?(?:[?#].*)?$/i);
+      if (match?.[1]) return match[1];
+    }
+    return undefined;
+  });
+  if (accountFromLink) return accountFromLink;
+
+  const profileControl = page
+    .getByRole('button', { name: /^(?:profile|trang cá nhân)$/i })
+    .or(page.getByRole('link', { name: /^(?:profile|trang cá nhân)$/i }))
+    .first();
+  if (await profileControl.isVisible().catch(() => false)) {
+    await profileControl.click();
+    await page.waitForURL((url) => /^\/@[A-Za-z0-9._]+\/?$/.test(url.pathname), { timeout: 15_000 });
   }
 
-  return page.evaluate(() => {
-    const pathMatch = location.pathname.match(/^\/@([A-Za-z0-9._]+)/);
-    if (pathMatch?.[1]) return pathMatch[1];
-
-    const links = Array.from(document.querySelectorAll('a'))
-      .map((anchor) => (anchor as HTMLAnchorElement).href)
-      .map((href) => href.match(/threads\.(?:com|net)\/@([A-Za-z0-9._]+)/)?.[1])
-      .filter(Boolean);
-    return links[0];
-  });
+  return page.evaluate(() => location.pathname.match(/^\/@([A-Za-z0-9._]+)\/?$/)?.[1]);
 }
 
 function readThreadsAccountName() {
@@ -215,8 +277,16 @@ function readThreadsAccountName() {
 
 function writeThreadsAccountName(username: string) {
   const config = getConfig();
+  const sanitized = sanitizeAccountName(username);
+  if (!/^[A-Za-z0-9._]+$/.test(sanitized)) return;
   fs.mkdirSync(config.threadsProfileDir, { recursive: true });
-  fs.writeFileSync(path.join(config.threadsProfileDir, 'threads-account.json'), JSON.stringify({ username: sanitizeAccountName(username) }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(config.threadsProfileDir, 'threads-account.json'), JSON.stringify({ username: sanitized }, null, 2), 'utf8');
+}
+
+function clearThreadsAccountName() {
+  const config = getConfig();
+  const filePath = path.join(config.threadsProfileDir, 'threads-account.json');
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
 
 function sanitizeAccountName(value: string) {
@@ -229,6 +299,76 @@ async function createThreadsContext(headless: boolean): Promise<BrowserContext> 
     headless,
     viewport: { width: headless ? 1440 : 1280, height: headless ? 1100 : 900 }
   });
+}
+
+async function requireThreadsAuthentication(context: BrowserContext, action: string) {
+  const cookies = await context.cookies();
+  if (!hasThreadsAuthCookie(cookies)) throw loginRequiredError(action);
+}
+
+function loginRequiredError(action: string) {
+  return new ThreadsAccessError(
+    'login_required',
+    `Threads session is expired or logged out while ${action}. Open Settings and use Threads Login again.`
+  );
+}
+
+async function waitForThreadsAuthentication(context: BrowserContext, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if (hasThreadsAuthCookie(await context.cookies())) return;
+      if (!context.pages().length) {
+        throw new ThreadsAccessError('login_required', 'Threads login was cancelled before authentication completed.');
+      }
+    } catch (error) {
+      if (error instanceof ThreadsAccessError) throw error;
+      throw new ThreadsAccessError('login_required', 'Threads login was closed before authentication completed.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+
+  throw new ThreadsAccessError(
+    'login_required',
+    'Threads login timed out. Complete the login in the browser window and try again.'
+  );
+}
+
+async function assertExpectedThreadsPostPage(page: Page, expectedPostUrl: string) {
+  const postId = expectedPostUrl.split('/post/')[1]?.split(/[?#]/)[0];
+  if (!postId) throw new ThreadsAccessError('unexpected_page', 'The Threads post URL is missing a post ID.');
+  if (await isLoginRequired(page)) throw loginRequiredError('opening this Threads post');
+
+  const snapshot = await page.evaluate((expectedId) => ({
+    url: location.href,
+    title: document.querySelector<HTMLMetaElement>('meta[property="og:title"]')?.content?.trim() || document.title,
+    description: document.querySelector<HTMLMetaElement>('meta[property="og:description"]')?.content?.trim()
+      || document.querySelector<HTMLMetaElement>('meta[name="description"]')?.content?.trim()
+      || '',
+    canonicalUrls: Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="canonical"]'))
+      .map((link) => link.href)
+      .concat(Array.from(document.querySelectorAll<HTMLMetaElement>('meta[property="og:url"]')).map((meta) => meta.content))
+      .filter(Boolean),
+    targetLinkCount: Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
+      .filter((anchor) => anchor.href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1] === expectedId)
+      .length
+  }), postId);
+
+  const currentUrlMatches = threadsUrlHasPostId(snapshot.url, postId);
+  const canonicalMatches = snapshot.canonicalUrls.some((url) => threadsUrlHasPostId(url, postId));
+  if (currentUrlMatches || canonicalMatches) return;
+
+  if (isInvalidThreadsPostRedirect(snapshot.url) || isGenericThreadsLoginMetadata(snapshot.title, snapshot.description)) {
+    throw new ThreadsAccessError(
+      'post_unavailable',
+      'Threads could not open this post. The saved session may have expired, or the post is unavailable/restricted. Check Threads Session and log in again.'
+    );
+  }
+
+  throw new ThreadsAccessError(
+    'unexpected_page',
+    `Threads opened a different page instead of post ${postId}. Final URL=${snapshot.url} targetLinks=${snapshot.targetLinkCount}.`
+  );
 }
 
 function urlForRequest(request: FetchRequest) {
@@ -296,7 +436,12 @@ async function attachTopReplies(page: Page, posts: ThreadsPost[]) {
   const candidates = posts.filter((post) => post.replies >= 10).slice(0, 8);
   const replyMap = new Map<string, ThreadsReply[]>();
   for (const post of candidates) {
-    const replies = await fetchTopReplies(page, post.url, post).catch(() => []);
+    let replies: ThreadsReply[] = [];
+    try {
+      replies = await fetchTopReplies(page, post.url, post);
+    } catch (error) {
+      if (error instanceof ThreadsAccessError) throw error;
+    }
     replyMap.set(post.id, replies);
     await page.waitForTimeout(650);
   }
@@ -315,12 +460,18 @@ async function fetchTopReplies(
   postUrl: string,
   context?: Pick<ThreadsPost, 'author' | 'authorHandle' | 'content'>
 ): Promise<ThreadsReply[]> {
+  await requireThreadsAuthentication(page.context(), 'fetching Threads replies');
   await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  if (await isLoginRequired(page)) throw new Error('Threads login is required. Open Settings and use Threads Login first.');
+  if (await isLoginRequired(page)) throw loginRequiredError('fetching Threads replies');
   // Threads hydrates the permalink and its ranked replies asynchronously.
   // Reading or scrolling too early can switch us onto a partially loaded
   // nested reply branch instead of the visible Top replies.
   await page.waitForTimeout(5000);
+  await assertExpectedThreadsPostPage(page, postUrl);
+  const rootId = postUrl.split('/post/')[1]?.split(/[?#]/)[0] ?? '';
+  const rootPermalinkExists = await page.locator(`a[href*="/post/${rootId}"]`).count().then((count) => count > 0);
+  if (!rootPermalinkExists) return [];
+
   const collectVisibleReplies = () => page.evaluate((rootUrl) => {
     const rootId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0] ?? '';
     const anchors = Array.from(document.querySelectorAll('a'))
@@ -597,6 +748,7 @@ export async function scrapeThreadsPostReplies(
 ): Promise<ThreadsReply[]> {
   const browserContext = await createThreadsContext(true);
   try {
+    await requireThreadsAuthentication(browserContext, 'fetching Threads replies');
     const page = await browserContext.newPage();
     return await fetchTopReplies(page, postUrl, threadContext);
   } finally {
@@ -636,7 +788,8 @@ function initialTrendState(timestamp: string): TrendState {
 }
 
 function isUsablePost(post: RawPost) {
-  if (!post.content || post.author === 'Unknown author' || !/\/post\/[A-Za-z0-9_-]+/.test(post.url)) return false;
+  if (!post.content || post.author === 'Unknown author' || !threadsUrlHasPostId(post.url, post.id)) return false;
+  if (isGenericThreadsContent(post.content)) return false;
   return !/for younew threadsearchsearchmessagesmessagesnotificationsactivityprofileprofileinsightsinsightssavedsaved/i.test(post.content.replace(/\s+/g, ''));
 }
 
@@ -659,7 +812,7 @@ function normalizeSearchText(value: string) {
 }
 
 async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<RawPost[]> {
-  return page.evaluate(
+  const posts = await page.evaluate(
     ({ mode, query }) => {
       const now = new Date().toISOString();
       const anchorPosts = parsePostAnchors();
@@ -680,10 +833,11 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
             .find((anchor) => /\/post\//.test(anchor.href));
           const handleLink = Array.from(container.querySelectorAll('a'))
             .map((anchor) => anchor as HTMLAnchorElement)
-            .find((anchor) => /threads\.net\/@/.test(anchor.href));
-          const imgs = extractMediaUrls(container);
+            .find((anchor) => /threads\.(?:com|net)\/@/.test(anchor.href));
+          const mediaCandidates = extractMediaCandidates(container);
 
-          const url = link ? normalizePostUrl(link.href) : location.href;
+          if (!link) return null;
+          const url = normalizePostUrl(link.href);
           const id = stableId(url, text);
           if (seen.has(id)) return null;
           seen.add(id);
@@ -700,7 +854,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
             replies: parseMetric(text, ['reply', 'replies']),
             reposts: parseMetric(text, ['repost', 'reposts']),
             timestamp: parseTimestamp(text),
-            imageUrls: imgs,
+            mediaCandidates,
             url,
             source: mode,
             keyword: query,
@@ -750,7 +904,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
             .map(compactToNumber)
             .filter((value) => value >= 0)
             .slice(-4);
-          const imgs = extractMediaUrls(container);
+          const mediaCandidates = extractMediaCandidates(container);
 
           posts.push({
             id: stableId(url, content),
@@ -761,7 +915,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
             replies: metrics[1] ?? 0,
             reposts: metrics[2] ?? 0,
             timestamp: parseTimestamp(lines[dateIndex] ?? ''),
-            imageUrls: imgs,
+            mediaCandidates,
             url,
             source: mode,
             keyword: query,
@@ -800,14 +954,30 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
         return match?.[1] ?? url;
       }
 
-      function extractMediaUrls(container: Element) {
-        return Array.from(
-          new Set(
-            Array.from(container.querySelectorAll('img'))
-              .map((image) => (image as HTMLImageElement).currentSrc || (image as HTMLImageElement).src)
-              .filter((src) => src && !/\/v\/t[^/]+-19\//i.test(src))
-          )
-        );
+      function extractMediaCandidates(container: Element) {
+        const candidates: Array<{
+          url: string;
+          kind: 'image' | 'video-poster';
+          alt?: string;
+          renderedWidth?: number;
+          renderedHeight?: number;
+        }> = [];
+        for (const image of Array.from(container.querySelectorAll<HTMLImageElement>('img[src], img[srcset]'))) {
+          const url = image.currentSrc || image.src;
+          if (!url) continue;
+          const rect = image.getBoundingClientRect();
+          candidates.push({
+            url,
+            kind: 'image',
+            alt: image.alt ?? '',
+            renderedWidth: rect.width,
+            renderedHeight: rect.height
+          });
+        }
+        for (const video of Array.from(container.querySelectorAll<HTMLVideoElement>('video[poster]'))) {
+          if (video.poster) candidates.push({ url: video.poster, kind: 'video-poster' });
+        }
+        return candidates;
       }
 
       function parseMetric(text: string, labels: string[]) {
@@ -885,7 +1055,8 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
           const author = lines[authorIndex];
           if (isReservedLine(author) || /^thread$/i.test(author)) continue;
           const textForId = `${author}|${lines[dateIndex]}|${content}`;
-          const postUrl = postLinksByAuthor.get(author)?.shift() ?? location.href;
+          const postUrl = postLinksByAuthor.get(author)?.shift();
+          if (!postUrl) continue;
           const id = stableId(postUrl, textForId);
           if (seen.has(id)) continue;
           seen.add(id);
@@ -899,7 +1070,7 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
             replies: metrics[1] ?? 0,
             reposts: metrics[2] ?? 0,
             timestamp: parseTimestamp(lines[dateIndex]),
-            imageUrls: [],
+            mediaCandidates: [],
             url: postUrl,
             source: mode,
             keyword: query,
@@ -971,33 +1142,45 @@ async function extractVisiblePosts(page: Page, request: FetchRequest): Promise<R
       }
     },
     { mode: request.mode, query: request.query }
-  ) as Promise<RawPost[]>;
+  ) as RawPostWithMediaCandidates[];
+
+  return posts.map(({ mediaCandidates, ...post }) => ({
+    ...post,
+    imageUrls: sanitizeThreadsMediaCandidates(mediaCandidates)
+  }));
 }
 
 async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPost | null> {
-  return page.evaluate((rootUrl) => {
+  const post = await page.evaluate((rootUrl) => {
     const now = new Date().toISOString();
     const postId = rootUrl.split('/post/')[1]?.split(/[?#]/)[0];
     const author = rootUrl.match(/\/@([A-Za-z0-9._]+)\/post\//)?.[1];
     if (!postId || !author) return null;
 
-    const permalink = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
-      .find((anchor) => anchor.href.includes(`/post/${postId}`));
+    const permalinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
+      .filter((anchor) => anchor.href.includes(`/post/${postId}`));
     let container: HTMLElement | null = null;
-    let current: HTMLElement | null = permalink ?? null;
-    for (let depth = 0; current && depth < 16; depth += 1) {
-      const postIds = new Set(
-        Array.from(current.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
-          .map((anchor) => anchor.href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
-          .filter(Boolean)
-      );
-      const text = current.innerText?.trim() ?? '';
-      const hasActions = Boolean(current.querySelector('svg[aria-label="Like"]'));
-      // Pick the complete root card (text + actions + media), but stop before
-      // the ancestor grows into the replies/conversation container.
-      if (text.length >= 20 && text.length <= 3000 && hasActions && postIds.size === 1) container = current;
-      if (postIds.size > 1 && container) break;
-      current = current.parentElement;
+    for (const permalink of permalinks) {
+      let candidate: HTMLElement | null = null;
+      let current: HTMLElement | null = permalink;
+      for (let depth = 0; current && depth < 16; depth += 1) {
+        const postIds = new Set(
+          Array.from(current.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
+            .map((anchor) => anchor.href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
+            .filter(Boolean)
+        );
+        const text = current.innerText?.trim() ?? '';
+        const hasActions = Boolean(current.querySelector('svg[aria-label="Like"], svg[aria-label="Unlike"]'));
+        // Pick the complete root card (text + actions + media), but stop before
+        // the ancestor grows into the replies/conversation container.
+        if (text.length >= 20 && text.length <= 3000 && hasActions && postIds.size === 1) candidate = current;
+        if (postIds.size > 1 && candidate) break;
+        current = current.parentElement;
+      }
+      if (candidate) {
+        container = candidate;
+        break;
+      }
     }
     if (!container) return null;
 
@@ -1023,28 +1206,36 @@ async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPos
       replies: metrics[1] ?? 0,
       reposts: metrics[2] ?? 0,
       timestamp: parseTimestamp(lines[dateIndex] ?? ''),
-      imageUrls: extractMediaUrls(container),
+      mediaCandidates: extractMediaCandidates(container),
       url: rootUrl,
       source: 'manual',
       fetchedAt: now
     };
 
-    function extractMediaUrls(root: HTMLElement) {
-      const urls: string[] = [];
+    function extractMediaCandidates(root: HTMLElement) {
+      const candidates: Array<{
+        url: string;
+        kind: 'image' | 'video-poster';
+        alt?: string;
+        renderedWidth?: number;
+        renderedHeight?: number;
+      }> = [];
       for (const image of Array.from(root.querySelectorAll<HTMLImageElement>('img[src], img[srcset]'))) {
         const url = image.currentSrc || image.src;
-        const alt = (image.alt ?? '').toLowerCase();
+        if (!url) continue;
         const rect = image.getBoundingClientRect();
-        const width = Math.max(image.naturalWidth, rect.width, Number(image.getAttribute('width')) || 0);
-        const height = Math.max(image.naturalHeight, rect.height, Number(image.getAttribute('height')) || 0);
-        if (!url || alt.includes('profile picture') || /\/v\/t[^/]+-19\//i.test(url)) continue;
-        if (width < 140 || height < 100) continue;
-        urls.push(url);
+        candidates.push({
+          url,
+          kind: 'image',
+          alt: image.alt ?? '',
+          renderedWidth: rect.width,
+          renderedHeight: rect.height
+        });
       }
       for (const video of Array.from(root.querySelectorAll<HTMLVideoElement>('video[poster]'))) {
-        if (video.poster) urls.push(video.poster);
+        if (video.poster) candidates.push({ url: video.poster, kind: 'video-poster' });
       }
-      return Array.from(new Set(urls)).slice(0, 10);
+      return candidates;
     }
 
     function compactToNumber(value: string) {
@@ -1084,7 +1275,11 @@ async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPos
       if (/^(?:d|day|ngày)/.test(normalized)) return 'd';
       return 'w';
     }
-  }, postUrl);
+  }, postUrl) as RawPostWithMediaCandidates | null;
+
+  if (!post) return null;
+  const { mediaCandidates, ...rawPost } = post;
+  return { ...rawPost, imageUrls: sanitizeThreadsMediaCandidates(mediaCandidates) };
 }
 
 async function acceptNonBlockingDialogs(page: Page) {

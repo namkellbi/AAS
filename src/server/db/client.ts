@@ -2,14 +2,16 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig } from '@/server/config';
+import { postAnalysisSignature } from '@/server/db/postAnalysisSignature';
 import { schema } from '@/server/db/schema';
 import { defaultCreativeAiEnabled, defaultFeatureVisibility } from '@/lib/content-mode';
 import { defaultKeywords } from '@/lib/default-keywords';
 import { recommendedOpenAIModel } from '@/lib/openai-models';
 import { defaultPricing, fallbackChatPricing, type PricingConfig } from '@/lib/pricing';
 import { filterUsefulReplies, isUsefulReplyContent, sanitizeThreadsReplyContent } from '@/lib/replies';
+import { sanitizeThreadsPostImageUrls } from '@/lib/threadsMedia';
 import { getDefaultVoiceForProvider, isTtsVoiceForProvider } from '@/lib/tts';
-import { detectThreadsAccountName } from '@/server/scraper/threadsScraper';
+import { detectThreadsAccountName, hasStoredThreadsAuthSession } from '@/server/scraper/threadsScraper';
 import { scorePost } from '@/server/scoring/trendingScore';
 import type { AIAnalysis, ApiUsageKind, AssetLibraryItem, AssetType, ContentGoal, FeatureVisibility, Keyword, KeywordExclusion, KeywordInsight, Product, ReadinessThresholds, SavedPost, ThreadsPost, ThreadsReply, TrendState, TtsProvider, TtsSegmentKind, TtsVoice, UploadLogEntry, UsageSummary } from '@/lib/types';
 import { clamp, nowIso } from '@/lib/utils';
@@ -163,6 +165,12 @@ function markDefaultKeywordsSeeded(database: Database.Database) {
 
 export function upsertPosts(posts: ThreadsPost[]) {
   const database = getDb();
+  const existingAnalysisSource = database.prepare(`
+    SELECT author, author_handle, content, top_replies
+    FROM threads_posts
+    WHERE id = ?
+  `);
+  const invalidateAnalysis = database.prepare('DELETE FROM ai_analysis WHERE post_id = ?');
   const statement = database.prepare(`
     INSERT INTO threads_posts (
       id, author, author_handle, content, likes, replies, reposts, timestamp, image_urls,
@@ -202,7 +210,17 @@ export function upsertPosts(posts: ThreadsPost[]) {
 
   const transaction = database.transaction((items: ThreadsPost[]) => {
     for (const post of items) {
-      statement.run({ ...post, imageUrls: JSON.stringify(post.imageUrls), topReplies: JSON.stringify(post.topReplies), authorHandle: post.authorHandle ?? null, keyword: post.keyword ?? null });
+      const existing = existingAnalysisSource.get(post.id) as Record<string, unknown> | undefined;
+      if (existing) {
+        const existingSignature = postAnalysisSignature({
+          author: String(existing.author),
+          authorHandle: existing.author_handle ? String(existing.author_handle) : undefined,
+          content: String(existing.content),
+          topReplies: jsonParse<ThreadsReply[]>(String(existing.top_replies ?? '[]'), [])
+        });
+        if (existingSignature !== postAnalysisSignature(post)) invalidateAnalysis.run(post.id);
+      }
+      statement.run({ ...post, imageUrls: JSON.stringify(sanitizeThreadsPostImageUrls(post.imageUrls)), topReplies: JSON.stringify(post.topReplies), authorHandle: post.authorHandle ?? null, keyword: post.keyword ?? null });
     }
   });
   transaction(posts);
@@ -1159,7 +1177,6 @@ export function getUsageSummary(): UsageSummary {
 }
 
 export function getAppSettings() {
-  const config = getConfig();
   const apiKey = getOpenAiApiKey();
   const geminiApiKey = getGeminiApiKey();
   const accountName = detectThreadsAccountName();
@@ -1170,7 +1187,7 @@ export function getAppSettings() {
     geminiApiKeySet: Boolean(geminiApiKey),
     maskedGeminiApiKey: geminiApiKey ? maskApiKey(geminiApiKey) : undefined,
     ttsProvider: getTtsProvider(),
-    threadsSessionExists: fs.existsSync(config.threadsStorageState) || fs.existsSync(config.threadsProfileDir),
+    threadsSessionExists: hasStoredThreadsAuthSession(),
     threadsAccountName: accountName === 'Your Chromium' ? undefined : accountName,
     language: getLanguage(),
     autoScanEnabled: getAutoScanEnabled(),
@@ -1256,7 +1273,7 @@ function rowToPost(row: Record<string, unknown>): ThreadsPost {
     replies: Number(row.replies),
     reposts: Number(row.reposts),
     timestamp: String(row.timestamp),
-    imageUrls: jsonParse<string[]>(String(row.image_urls), []),
+    imageUrls: sanitizeThreadsPostImageUrls(jsonParse<string[]>(String(row.image_urls), [])),
     url: String(row.url),
     source: row.source as ThreadsPost['source'],
     keyword: row.keyword ? String(row.keyword) : undefined,
