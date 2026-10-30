@@ -196,7 +196,6 @@ export type SavedPost = {
   savedAt: string;
 };
 
-export type TtsSegmentKind = 'hook' | 'post' | 'reply' | 'transition' | 'solution' | 'cta';
 export type TtsProvider = 'openai' | 'gemini' | 'vieneu';
 export type OpenAiTtsVoice = 'onyx' | 'nova' | 'shimmer';
 export type GeminiTtsVoice =
@@ -273,9 +272,7 @@ export type AppSettings = {
   defaultSpeed: number;
   transitionSoundEnabled: boolean;
   postAgeHours: number;
-  ttsInstructions: Record<TtsSegmentKind, string>;
   segmentSilenceMs: number;
-  karaokeCaptionsEnabled: boolean;
   scanGoal: ContentGoal;
   readinessThresholds: ReadinessThresholds;
   dailyCostLimitUsd: number;
@@ -303,9 +300,7 @@ export type UpdateSettingsRequest = {
   defaultSpeed?: number;
   transitionSoundEnabled?: boolean;
   postAgeHours?: number;
-  ttsInstructions?: Partial<Record<TtsSegmentKind, string>>;
   segmentSilenceMs?: number;
-  karaokeCaptionsEnabled?: boolean;
   scanGoal?: ContentGoal;
   readinessThresholds?: Partial<ReadinessThresholds>;
   dailyCostLimitUsd?: number;
@@ -576,9 +571,9 @@ export type DesktopAPI = {
   testGemini: () => Promise<ServiceHealth>;
   getLocalTtsStatus: () => Promise<LocalTtsStatus>;
   previewTts: (request: TtsPreviewRequest) => Promise<TtsPreviewResult>;
-  normalizeSpeech: (texts: string[], relatedPostId?: string) => Promise<string[]>;
   openOpenAiBilling: () => Promise<ServiceHealth>;
   openGeminiApiKeys: () => Promise<ServiceHealth>;
+  openDataFolder: () => Promise<ServiceHealth>;
   getThreadsLoginStatus: () => Promise<ServiceHealth>;
   openPostExternal: (post: ThreadsPost) => Promise<ServiceHealth>;
   renderVideoDraft: (request: VideoDraftRequest) => Promise<VideoDraftResult>;

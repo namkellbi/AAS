@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import type { OpenDialogOptions } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { analyzeAffiliateOpportunity, testOpenAIConnection } from '@/server/ai/affiliateAnalysisService';
 import { discoverAffiliateKeywords } from '@/server/ai/keywordIntelligenceService';
@@ -14,6 +15,7 @@ import {
   getAnalysis,
   getAppSettings,
   getAsset,
+  getCreativeAiEnabled,
   getDb,
   getProduct,
   getOpenAiApiKey,
@@ -36,7 +38,6 @@ import {
   setReadinessThresholds,
   setSetting,
   setKeywordEnabled,
-  setTtsInstructions,
   updateKeyword,
   updatePricing,
 } from '@/server/db/client';
@@ -47,7 +48,6 @@ import { scanOpportunityInbox } from '@/server/services/opportunityScanService';
 import { getThreadsLoginStatus, openThreadsLoginSession } from '@/server/scraper/threadsScraper';
 import { renderVideoDraft } from '@/server/video/videoDraftService';
 import { createTtsPreview, testGeminiConnection } from '@/server/video/ttsService';
-import { normalizeVietnameseSpeechBatch } from '@/server/video/speechNormalizationService';
 import { getVieneuLocalStatus, stopVieneuLocalService } from '@/server/video/vieneuLocalService';
 import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, markGeneratedVideoPublished, registerAsset, setGeneratedVideoApproved, setGeneratedVideoPublishState } from '@/server/services/assetLibraryService';
 import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, ManualPublishRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
@@ -101,8 +101,10 @@ function registerIpc() {
     return scanOpportunityInbox((progress) => _event.sender.send('opportunities:scan-progress', progress), goal === 'engagement' ? 'engagement' : 'affiliate');
   });
   ipcMain.handle('workflow:create-from-link', async (_event, url: string, options?: { confirmOverQuota?: boolean }) => {
-    const blocked = quotaBlock(options);
-    if (blocked) return blocked;
+    if (getCreativeAiEnabled()) {
+      const blocked = quotaBlock(options);
+      if (blocked) return blocked;
+    }
     return createVideoFromLink(url, (progress) => _event.sender.send('workflow:create-from-link-progress', progress));
   });
   ipcMain.handle('threads:login', async () => openThreadsLoginSession());
@@ -152,9 +154,7 @@ function registerIpc() {
     }
     if (typeof settings.transitionSoundEnabled === 'boolean') setSetting('video.transition_sound_enabled', String(settings.transitionSoundEnabled));
     if (typeof settings.postAgeHours === 'number' && settings.postAgeHours >= 1) setSetting('scraper.post_age_hours', String(Math.round(settings.postAgeHours)));
-    if (settings.ttsInstructions && typeof settings.ttsInstructions === 'object') setTtsInstructions(settings.ttsInstructions);
     if (typeof settings.segmentSilenceMs === 'number' && Number.isFinite(settings.segmentSilenceMs)) setSetting('video.segment_silence_ms', String(Math.round(Math.min(Math.max(settings.segmentSilenceMs, 0), 1500))));
-    if (typeof settings.karaokeCaptionsEnabled === 'boolean') setSetting('video.karaoke_captions_enabled', String(settings.karaokeCaptionsEnabled));
     if (settings.scanGoal === 'engagement' || settings.scanGoal === 'affiliate') setSetting('app.scan_goal', settings.scanGoal);
     if (settings.readinessThresholds && typeof settings.readinessThresholds === 'object') setReadinessThresholds(settings.readinessThresholds);
     if (typeof settings.dailyCostLimitUsd === 'number' && Number.isFinite(settings.dailyCostLimitUsd) && settings.dailyCostLimitUsd >= 0) setSetting('costs.daily_limit_usd', String(settings.dailyCostLimitUsd));
@@ -166,18 +166,23 @@ function registerIpc() {
       if (typeof settings.featureVisibility.assetLibrary === 'boolean') setSetting('features.asset_library', String(settings.featureVisibility.assetLibrary));
       if (typeof settings.featureVisibility.resultsTracking === 'boolean') setSetting('features.results_tracking', String(settings.featureVisibility.resultsTracking));
     }
+    // The active video workflow is intentionally local/manual. Keep legacy
+    // cloud settings in storage for future modules, but never activate them
+    // through the current Settings screen.
+    setSetting('video.tts_provider', 'vieneu');
+    setSetting('video.karaoke_captions_enabled', 'false');
+    setSetting('features.creative_ai', 'false');
     return getAppSettings();
   });
   ipcMain.handle('ai:test', async () => testOpenAIConnection());
   ipcMain.handle('gemini:test', async () => testGeminiConnection());
   ipcMain.handle('tts:local-status', async () => getVieneuLocalStatus());
-  ipcMain.handle('tts:preview', async (_event, request: TtsPreviewRequest) => createTtsPreview(request));
-  ipcMain.handle('tts:normalize', async (_event, texts: string[], relatedPostId?: string) => {
-    if (!Array.isArray(texts) || texts.length > 20 || texts.some((text) => typeof text !== 'string' || text.length > 10000)) {
-      throw new Error('Nội dung chuẩn hóa TTS không hợp lệ.');
-    }
-    return normalizeVietnameseSpeechBatch(texts, getOpenAiApiKey(), relatedPostId);
-  });
+  ipcMain.handle('tts:preview', async (_event, request: TtsPreviewRequest) => createTtsPreview({
+    ...request,
+    provider: 'vieneu',
+    voice: isTtsVoiceForProvider('vieneu', request.voice) ? request.voice : 'Ngoc-Huyen-Clone',
+    instructions: ''
+  }));
   ipcMain.handle('shell:open-openai-billing', async () => {
     await shell.openExternal('https://platform.openai.com/settings/organization/billing/overview');
     return { ok: true, message: 'Opening OpenAI Billing dashboard.' };
@@ -185,6 +190,14 @@ function registerIpc() {
   ipcMain.handle('shell:open-gemini-api-keys', async () => {
     await shell.openExternal('https://aistudio.google.com/app/apikey');
     return { ok: true, message: 'Opening Google AI Studio API keys.' };
+  });
+  ipcMain.handle('shell:open-data-folder', async () => {
+    const dataDir = path.resolve(process.cwd(), 'data');
+    fs.mkdirSync(dataDir, { recursive: true });
+    const error = await shell.openPath(dataDir);
+    return error
+      ? { ok: false, message: error }
+      : { ok: true, message: 'Data folder opened.' };
   });
   ipcMain.handle('threads:login-status', async () => getThreadsLoginStatus());
   ipcMain.handle('shell:open-post-external', async (_event, post: ThreadsPost) => {

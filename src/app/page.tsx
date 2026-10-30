@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, ExternalLink, Filter, FolderOpen, Link2, LoaderCircle, LogIn, Play, RefreshCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, Volume2, X } from 'lucide-react';
+import { Filter, FolderOpen, Link2, LoaderCircle, LogIn, Play, RefreshCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, Volume2, X } from 'lucide-react';
 import { AnalysisPanel } from '@/components/analysis/analysis-panel';
 import { TikTokBriefModal } from '@/components/analysis/tiktok-brief-modal';
 import { CreateVideoHome } from '@/components/create-video/create-video-home';
@@ -18,10 +18,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { defaultFeatureVisibility } from '@/lib/content-mode';
 import { translations, type Language, type TranslationCopy } from '@/lib/i18n';
-import { formatModelPrice, openAIModelOptions, recommendedOpenAIModel } from '@/lib/openai-models';
 import { filterUsefulReplies } from '@/lib/replies';
-import { getDefaultVoiceForProvider, getTtsModel, getTtsVoiceOptions, isTtsVoiceForProvider, openAiTtsVoiceOptions } from '@/lib/tts';
-import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, CreateFromLinkProgress, FetchMode, GeneratedVideoItem, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, LocalTtsStatus, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, ThreadsPost, TtsProvider, TtsSegmentKind, TtsVoice, UpdateSettingsRequest, UploadLogEntry, UsageSummary, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
+import { getTtsVoiceOptions, isTtsVoiceForProvider } from '@/lib/tts';
+import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, CreateFromLinkProgress, FetchMode, GeneratedVideoItem, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, LocalTtsStatus, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, ThreadsPost, TtsVoice, UpdateSettingsRequest, UploadLogEntry, UsageSummary, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 type VideoRenderSession = {
@@ -630,20 +629,6 @@ export default function HomePage() {
     return updated;
   }
 
-  async function saveAndVerifyOpenAI(next: { openAiApiKey?: string; openAiModel?: string }) {
-    await saveSettings(next);
-    const result = await window.desktopAPI?.testOpenAI();
-    if (result) showHealth(result);
-    if (window.desktopAPI) setSettings(await window.desktopAPI.getSettings());
-  }
-
-  async function saveAndVerifyGemini(next: { geminiApiKey?: string }) {
-    await saveSettings(next);
-    const result = await window.desktopAPI?.testGemini();
-    if (result) showHealth(result);
-    if (window.desktopAPI) setSettings(await window.desktopAPI.getSettings());
-  }
-
   async function checkThreadsSession() {
     const result = await window.desktopAPI?.getThreadsLoginStatus();
     if (result) showHealth(result);
@@ -714,7 +699,6 @@ export default function HomePage() {
               creativeAiEnabled={settings?.creativeAiEnabled ?? false}
               isCreatingFromLink={isCreatingFromLink}
               language={language}
-              openAiReady={Boolean(settings?.openAiApiKeySet)}
               threadsReady={Boolean(settings?.threadsSessionExists)}
               onCreateFromLink={createFromLink}
               onCreateLinkUrl={setCreateLinkUrl}
@@ -844,13 +828,10 @@ export default function HomePage() {
             <SettingsView
               settings={settings}
               copy={copy}
+              assetCount={assets.filter((asset) => asset.type === 'background').length}
               onSave={saveSettings}
-              onSaveOpenAI={saveAndVerifyOpenAI}
-              onSaveGemini={saveAndVerifyGemini}
               onLoginThreads={loginThreads}
               onCheckThreads={checkThreadsSession}
-              onOpenBilling={() => window.desktopAPI?.openOpenAiBilling()}
-              onOpenGeminiApiKeys={() => window.desktopAPI?.openGeminiApiKeys()}
             />
           ) : activeView === 'products' ? (
             <ProductsView
@@ -1119,64 +1100,41 @@ function FilterToggle({ active, label, onClick }: { active: boolean; label: stri
 function SettingsView({
   settings,
   copy,
+  assetCount,
   onSave,
-  onSaveOpenAI,
-  onSaveGemini,
   onLoginThreads,
-  onCheckThreads,
-  onOpenBilling,
-  onOpenGeminiApiKeys
+  onCheckThreads
 }: {
   settings: AppSettings | null;
   copy: TranslationCopy;
+  assetCount: number;
   onSave: (settings: UpdateSettingsRequest) => Promise<AppSettings | null>;
-  onSaveOpenAI: (settings: { openAiApiKey?: string; openAiModel?: string }) => Promise<void>;
-  onSaveGemini: (settings: { geminiApiKey?: string }) => Promise<void>;
   onLoginThreads: () => void;
   onCheckThreads: () => void;
-  onOpenBilling: () => void;
-  onOpenGeminiApiKeys: () => void;
 }) {
-  const [apiKey, setApiKey] = useState('');
-  const [geminiApiKey, setGeminiApiKey] = useState('');
-  const [model, setModel] = useState(settings?.openAiModel ?? recommendedOpenAIModel);
-  const [saving, setSaving] = useState(false);
-  const [savingGemini, setSavingGemini] = useState(false);
-  const [ttsDrafts, setTtsDrafts] = useState<Record<TtsSegmentKind, string>>({ hook: '', post: '', reply: '', transition: '', solution: '', cta: '' });
   const [silenceDraft, setSilenceDraft] = useState(400);
-  const [ttsProviderDraft, setTtsProviderDraft] = useState<TtsProvider>(settings?.ttsProvider ?? 'openai');
-  const [voiceDraft, setVoiceDraft] = useState<TtsVoice>(settings?.defaultVoice ?? 'nova');
+  const [voiceDraft, setVoiceDraft] = useState<TtsVoice>(
+    settings?.defaultVoice && isTtsVoiceForProvider('vieneu', settings.defaultVoice)
+      ? settings.defaultVoice
+      : 'Ngoc-Huyen-Clone'
+  );
   const [speedDraft, setSpeedDraft] = useState(settings?.defaultSpeed ?? 1.1);
   const [previewText, setPreviewText] = useState('Some stories only need a slower pace to keep people listening until the end.');
   const [previewingVoice, setPreviewingVoice] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<string | null>(null);
   const [localTtsStatus, setLocalTtsStatus] = useState<LocalTtsStatus | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
-  const speedSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [savingVoice, setSavingVoice] = useState(false);
-  const [dailyLimitDraft, setDailyLimitDraft] = useState(0);
-  const [pricingDraft, setPricingDraft] = useState({ chatInPerM: 0, chatOutPerM: 0, ttsPerMillionChars: 12, whisperPerMinute: 0.006 });
-  const [savingCosts, setSavingCosts] = useState(false);
+  const pendingLocalSettingsRef = useRef<{ defaultVoice?: TtsVoice; defaultSpeed?: number; segmentSilenceMs?: number }>({});
+  const localSettingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (settings?.openAiModel) setModel(settings.openAiModel);
-  }, [settings?.openAiModel]);
-
-  useEffect(() => {
-    if (settings?.ttsInstructions) setTtsDrafts(settings.ttsInstructions);
     if (typeof settings?.segmentSilenceMs === 'number') setSilenceDraft(settings.segmentSilenceMs);
-    if (settings?.ttsProvider) setTtsProviderDraft(settings.ttsProvider);
-    if (settings?.defaultVoice) setVoiceDraft(settings.defaultVoice);
+    if (settings?.defaultVoice && isTtsVoiceForProvider('vieneu', settings.defaultVoice)) setVoiceDraft(settings.defaultVoice);
     if (typeof settings?.defaultSpeed === 'number') setSpeedDraft(settings.defaultSpeed);
-  }, [settings?.defaultSpeed, settings?.defaultVoice, settings?.ttsInstructions, settings?.segmentSilenceMs, settings?.ttsProvider]);
-
-  useEffect(() => {
-    if (typeof settings?.dailyCostLimitUsd === 'number') setDailyLimitDraft(settings.dailyCostLimitUsd);
-    if (settings?.pricing) setPricingDraft(settings.pricing);
-  }, [settings?.dailyCostLimitUsd, settings?.pricing]);
+  }, [settings?.defaultSpeed, settings?.defaultVoice, settings?.segmentSilenceMs]);
 
   useEffect(() => () => {
-    if (speedSaveTimerRef.current) clearTimeout(speedSaveTimerRef.current);
+    if (localSettingsSaveTimerRef.current) clearTimeout(localSettingsSaveTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -1191,36 +1149,31 @@ function SettingsView({
     );
   }, [settings?.language]);
 
-  const allTtsKinds: Array<{ kind: TtsSegmentKind; label: string }> = [
-    { kind: 'hook', label: copy.ttsKindHook },
-    { kind: 'post', label: copy.ttsKindPost },
-    { kind: 'reply', label: copy.ttsKindReply },
-    { kind: 'transition', label: copy.ttsKindTransition },
-    { kind: 'solution', label: copy.ttsKindSolution },
-    { kind: 'cta', label: copy.ttsKindCta }
-  ];
-  const ttsKinds = settings?.creativeAiEnabled ? allTtsKinds : allTtsKinds.filter(({ kind }) => kind === 'post' || kind === 'reply');
   const vi = settings?.language === 'vi';
   const features = settings?.featureVisibility ?? defaultFeatureVisibility;
-  const activeVoiceOptions = getTtsVoiceOptions(ttsProviderDraft);
-  const selectedVoiceOption = activeVoiceOptions.find((option) => option.id === voiceDraft) ?? activeVoiceOptions[0];
+  const activeVoiceOptions = getTtsVoiceOptions('vieneu');
 
-  function selectTtsProvider(provider: TtsProvider) {
-    setTtsProviderDraft(provider);
-    if (!isTtsVoiceForProvider(provider, voiceDraft)) {
-      setVoiceDraft(getDefaultVoiceForProvider(provider));
-    }
-    setPreviewStatus(null);
+  function queueLocalVideoSettings(next: { defaultVoice?: TtsVoice; defaultSpeed?: number; segmentSilenceMs?: number }) {
+    pendingLocalSettingsRef.current = { ...pendingLocalSettingsRef.current, ...next };
+    if (localSettingsSaveTimerRef.current) clearTimeout(localSettingsSaveTimerRef.current);
+    localSettingsSaveTimerRef.current = setTimeout(() => {
+      localSettingsSaveTimerRef.current = null;
+      const pending = pendingLocalSettingsRef.current;
+      pendingLocalSettingsRef.current = {};
+      void onSave({
+        ttsProvider: 'vieneu',
+        defaultVoice: pending.defaultVoice ?? voiceDraft,
+        defaultSpeed: pending.defaultSpeed ?? speedDraft,
+        segmentSilenceMs: pending.segmentSilenceMs ?? silenceDraft,
+        creativeAiEnabled: false
+      });
+    }, 300);
   }
 
   function updateSpeed(nextSpeed: number) {
     const normalizedSpeed = Math.round(Math.min(Math.max(nextSpeed, 0.9), 1.3) * 100) / 100;
     setSpeedDraft(normalizedSpeed);
-    if (speedSaveTimerRef.current) clearTimeout(speedSaveTimerRef.current);
-    speedSaveTimerRef.current = setTimeout(() => {
-      speedSaveTimerRef.current = null;
-      void onSave({ defaultSpeed: normalizedSpeed });
-    }, 250);
+    queueLocalVideoSettings({ defaultSpeed: normalizedSpeed });
   }
 
   async function previewVoice() {
@@ -1233,14 +1186,12 @@ function SettingsView({
       previewAudioRef.current = null;
       const result = await api.previewTts({
         text: previewText,
-        provider: ttsProviderDraft,
+        provider: 'vieneu',
         voice: voiceDraft,
         speed: speedDraft,
-        instructions: ttsDrafts.post
+        instructions: ''
       });
-      if (ttsProviderDraft === 'vieneu') {
-        void api.getLocalTtsStatus().then(setLocalTtsStatus);
-      }
+      void api.getLocalTtsStatus().then(setLocalTtsStatus);
       if (!result.ok || !result.audioDataUrl) {
         setPreviewStatus(result.message);
         return;
@@ -1252,19 +1203,10 @@ function SettingsView({
         setPreviewStatus(vi ? 'Không thể phát bản nghe thử.' : 'Unable to play the preview.');
         setPreviewingVoice(false);
       };
-      const providerLabel = result.source === 'gemini_api'
-        ? 'Gemini'
-        : result.source === 'local_vieneu'
-          ? 'VieNeu Local'
-          : 'OpenAI';
       setPreviewStatus(
         result.cached
-          ? (vi ? 'Đang phát từ cache, không gọi lại API.' : 'Playing from cache; no new API call.')
-          : result.source === 'local_vieneu'
-            ? (vi
-                ? 'Giọng được tạo trên máy; văn bản được chuẩn hóa theo ngữ cảnh khi có OpenAI key.'
-                : 'Voice generated on-device; text is context-normalized when an OpenAI key is available.')
-            : (vi ? `Bản nghe thử mới được tạo qua ${providerLabel} API.` : `New preview generated with the ${providerLabel} API.`)
+          ? (vi ? 'Đang phát từ cache VieNeu trên máy.' : 'Playing from the local VieNeu cache.')
+          : (vi ? 'Giọng được tạo hoàn toàn trên máy bằng VieNeu.' : 'Voice generated entirely on-device with VieNeu.')
       );
       await audio.play();
     } catch (previewError) {
@@ -1276,21 +1218,17 @@ function SettingsView({
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div className="rounded-lg border border-accent/30 bg-panel p-5">
-        <div className="mb-1 flex items-center gap-2 text-base font-semibold text-text">
-          <SlidersHorizontal className="size-4 text-accent" />
-          {vi ? 'Giao diện & tính năng' : 'Interface & features'}
-        </div>
-        <div className="mb-4 text-sm text-muted">
-          {vi ? 'Các công cụ phụ được ẩn khỏi sidebar cho đến khi bạn cần.' : 'Optional tools stay out of the sidebar until you need them.'}
-        </div>
-        <div className="divide-y divide-border">
-          <SettingsToggle
-            checked={settings?.creativeAiEnabled ?? false}
-            label={vi ? 'AI sáng tạo nội dung' : 'Creative AI copy'}
-            description={vi ? 'Sinh hook, transition, solution, CTA và caption. Tắt để đọc nguyên văn bài gốc.' : 'Generate hooks, transitions, solutions, CTAs and captions. Keep off for verbatim reading.'}
-            onChange={(checked) => onSave({ creativeAiEnabled: checked })}
-          />
+      <details className="rounded-lg border border-border bg-panel p-5">
+        <summary className="cursor-pointer list-none">
+          <div className="flex items-center gap-2 text-base font-semibold text-text">
+            <SlidersHorizontal className="size-4 text-accent" />
+            {vi ? 'Module mở rộng' : 'Optional modules'}
+          </div>
+          <div className="mt-1 text-sm text-muted">
+            {vi ? 'Các công cụ nghiên cứu được giữ lại nhưng tắt mặc định.' : 'Research tools remain available but are disabled by default.'}
+          </div>
+        </summary>
+        <div className="mt-4 divide-y divide-border border-t border-border pt-2">
           <SettingsToggle
             checked={features.opportunityDiscovery}
             label={vi ? 'Săn cơ hội & nghiên cứu' : 'Discovery & research'}
@@ -1303,90 +1241,8 @@ function SettingsView({
             description={vi ? 'Danh mục sản phẩm và ghép sản phẩm vào nội dung.' : 'Product catalog and product matching.'}
             onChange={(checked) => onSave({ featureVisibility: { affiliateWorkspace: checked } })}
           />
-          <SettingsToggle
-            checked={features.resultsTracking}
-            label={vi ? 'Theo dõi kết quả' : 'Results tracking'}
-            description={vi ? 'Lưu hiệu suất video sau khi đăng.' : 'Log published video performance.'}
-            onChange={(checked) => onSave({ featureVisibility: { resultsTracking: checked } })}
-          />
         </div>
-      </div>
-
-      <div className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-4 text-base font-semibold text-text">{copy.openAi}</div>
-        <div className="grid gap-3">
-          <Input
-            type="password"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            placeholder={settings?.openAiApiKeySet ? settings.maskedOpenAiApiKey ?? copy.apiKeySaved : copy.apiKeyPlaceholder}
-          />
-          <div className="text-xs text-muted">
-            {settings?.openAiApiKeySet ? `${copy.apiKeySaved}: ${settings.maskedOpenAiApiKey ?? 'sk-••••••••'}. ${copy.apiKeyHelpSaved}` : copy.apiKeyHelpEmpty}
-          </div>
-          <ModelSelect value={model} onChange={setModel} />
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="primary"
-              disabled={saving}
-              onClick={async () => {
-                setSaving(true);
-                await onSaveOpenAI({ openAiApiKey: apiKey, openAiModel: model });
-                setApiKey('');
-                setSaving(false);
-              }}
-            >
-              {saving ? copy.saving : copy.save}
-            </Button>
-            <Button icon={<ExternalLink className="size-4" />} onClick={onOpenBilling}>
-              {copy.openAiBillingDashboard}
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-1 text-base font-semibold text-text">Gemini TTS</div>
-        <div className="mb-4 text-sm text-muted">
-          {vi
-            ? 'Dùng Gemini Developer API. Free tier phụ thuộc quota của project Google AI Studio.'
-            : 'Uses the Gemini Developer API. Free-tier access depends on your Google AI Studio project quota.'}
-        </div>
-        <div className="grid gap-3">
-          <Input
-            type="password"
-            value={geminiApiKey}
-            onChange={(event) => setGeminiApiKey(event.target.value)}
-            placeholder={settings?.geminiApiKeySet ? settings.maskedGeminiApiKey ?? 'Gemini API key đã lưu' : 'Gemini API key'}
-          />
-          <div className="text-xs text-muted">
-            {settings?.geminiApiKeySet
-              ? (vi
-                  ? `Đã lưu cục bộ: ${settings.maskedGeminiApiKey ?? '••••••••'}. Chỉ nhập key mới khi muốn thay thế.`
-                  : `Saved locally: ${settings.maskedGeminiApiKey ?? '••••••••'}. Enter a new key only to replace it.`)
-              : (vi
-                  ? 'Tạo API key trong Google AI Studio rồi lưu và kiểm tra kết nối.'
-                  : 'Create an API key in Google AI Studio, then save and verify it.')}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="primary"
-              disabled={savingGemini || (!geminiApiKey.trim() && !settings?.geminiApiKeySet)}
-              onClick={async () => {
-                setSavingGemini(true);
-                await onSaveGemini({ geminiApiKey });
-                setGeminiApiKey('');
-                setSavingGemini(false);
-              }}
-            >
-              {savingGemini ? copy.saving : (vi ? 'Lưu & kiểm tra' : 'Save & verify')}
-            </Button>
-            <Button icon={<ExternalLink className="size-4" />} onClick={onOpenGeminiApiKeys}>
-              {vi ? 'Mở Google AI Studio' : 'Open Google AI Studio'}
-            </Button>
-          </div>
-        </div>
-      </div>
+      </details>
 
       <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-4 text-base font-semibold text-text">{copy.threadsSession}</div>
@@ -1420,7 +1276,7 @@ function SettingsView({
         </select>
       </div>
 
-      {features.opportunityDiscovery ? <div className="rounded-lg border border-border bg-panel p-5">
+      {false && features.opportunityDiscovery ? <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-2 text-base font-semibold text-text">{copy.autoScan}</div>
         <div className="mb-4 text-sm text-muted">{copy.autoScanHelp}</div>
         <div className="flex items-center justify-between gap-4 border-b border-border pb-4">
@@ -1458,157 +1314,40 @@ function SettingsView({
       </div> : null}
 
       <div className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-2 text-base font-semibold text-text">{copy.ttsInstructionsTitle}</div>
-        <div className="mb-4 text-sm text-muted">{copy.ttsInstructionsHelp}</div>
-
-        <div className="mb-5">
-          <div className="mb-2 text-xs font-medium text-muted">{vi ? 'Nhà cung cấp TTS' : 'TTS provider'}</div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {(['openai', 'gemini', 'vieneu'] as TtsProvider[]).map((provider) => {
-              const selected = ttsProviderDraft === provider;
-              const checkingLocal = provider === 'vieneu' && !localTtsStatus;
-              const ready = provider === 'gemini'
-                ? settings?.geminiApiKeySet
-                : provider === 'vieneu'
-                  ? localTtsStatus?.installed && localTtsStatus.modelReady
-                  : settings?.openAiApiKeySet;
-              return (
-                <button
-                  key={provider}
-                  type="button"
-                  aria-pressed={selected}
-                  className={cn(
-                    'min-h-14 rounded-md border px-3 py-2 text-left transition',
-                    selected
-                      ? 'border-accent bg-accent/10 text-text'
-                      : 'border-border bg-[#0f1217] text-muted hover:border-accent/50 hover:text-text'
-                  )}
-                  onClick={() => selectTtsProvider(provider)}
-                >
-                  <span className="flex items-center justify-between gap-2 text-sm font-semibold">
-                    {provider === 'gemini' ? 'Gemini' : provider === 'vieneu' ? 'VieNeu Local' : 'OpenAI'}
-                    <span className={cn('text-[10px] font-medium', ready ? 'text-emerald-300' : 'text-amber-300')}>
-                      {ready
-                        ? provider === 'vieneu'
-                          ? (vi ? 'Sẵn sàng' : 'Ready')
-                          : (vi ? 'Đã kết nối' : 'Connected')
-                        : checkingLocal
-                          ? (vi ? 'Đang kiểm tra' : 'Checking')
-                        : provider === 'vieneu'
-                          ? (vi ? 'Chưa cài model' : 'Model missing')
-                          : (vi ? 'Thiếu API key' : 'API key needed')}
-                    </span>
-                  </span>
-                  <span className="mt-1 block text-xs">
-                    {provider === 'gemini'
-                      ? (vi ? '30 giọng · tiếng Việt · free tier theo quota' : '30 voices · Vietnamese · quota-based free tier')
-                      : provider === 'vieneu'
-                        ? (vi ? 'Giọng Việt local · chuẩn hóa ngữ cảnh thông minh' : 'Local Vietnamese voices · smart context normalization')
-                        : (vi ? 'Ổn định · dùng chung hệ sinh thái hiện tại' : 'Stable · current ecosystem')}
-                  </span>
-                </button>
-              );
-            })}
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="text-base font-semibold text-text">VieNeu Local</div>
+          <div className={cn('flex items-center gap-2 text-xs font-medium', localTtsStatus?.ok ? 'text-emerald-200' : 'text-amber-200')}>
+            <span className={cn('size-2 rounded-full', localTtsStatus?.ok ? 'bg-emerald-400' : 'bg-amber-400')} />
+            {localTtsStatus?.ok ? (vi ? 'Sẵn sàng' : 'Ready') : (vi ? 'Đang kiểm tra' : 'Checking')}
           </div>
         </div>
 
-        <div className="mb-5 flex flex-wrap items-center gap-2 border-y border-border py-3 text-xs">
-          <span className="rounded-md bg-sky-400/10 px-2 py-1 font-medium text-sky-200">
-            {ttsProviderDraft === 'gemini'
-              ? 'Gemini API'
-              : ttsProviderDraft === 'vieneu'
-                ? 'Local CPU'
-                : 'OpenAI API'}
-          </span>
-          <span className="text-muted">{getTtsModel(ttsProviderDraft)}</span>
-          <span className="text-muted">·</span>
-          <span className="text-muted">
-            {ttsProviderDraft === 'vieneu' ? (vi ? 'Chạy trên máy' : 'On-device') : 'Cloud TTS'}
-          </span>
-          <span className="ml-auto text-emerald-200">{vi ? 'Có cache giọng đọc' : 'Speech cache enabled'}</span>
-        </div>
-
-        {ttsProviderDraft === 'vieneu' ? (
-          <div className="mb-5 border-b border-border pb-5 text-xs">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <span className={localTtsStatus?.ok ? 'text-emerald-200' : 'text-amber-200'}>
-                {localTtsStatus?.message ?? (vi ? 'Đang kiểm tra VieNeu Local...' : 'Checking VieNeu Local...')}
-              </span>
-              {localTtsStatus?.version ? <span className="text-muted">v{localTtsStatus.version}</span> : null}
-              {localTtsStatus?.backend ? <span className="text-muted">{localTtsStatus.backend}</span> : null}
-            </div>
-            <div className="mt-2 text-muted">
-              {vi
-                ? 'VieNeu tạo audio trên máy. Khi có OpenAI key, phần văn bản được gửi để sửa typo và viết tắt theo ngữ cảnh trước khi đọc.'
-                : 'VieNeu generates audio on-device. With an OpenAI key, text is sent for contextual typo and abbreviation normalization first.'}
-            </div>
-            {settings?.karaokeCaptionsEnabled ? (
-              <div className="mt-2 text-amber-200">
-                {vi
-                  ? 'VieNeu không tốn API cho audio; chuẩn hóa văn bản và Karaoke timestamp vẫn dùng OpenAI.'
-                  : 'VieNeu audio generation has no API cost; text normalization and Karaoke timestamps still use OpenAI.'}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="mb-5">
-          <div className="mb-2 text-xs font-medium text-muted">{vi ? 'Giọng đọc' : 'Voice'}</div>
-          {ttsProviderDraft === 'openai' ? (
-            <div className="grid gap-2 sm:grid-cols-3">
-              {openAiTtsVoiceOptions.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  aria-pressed={voiceDraft === option.id}
-                  className={cn(
-                    'min-h-16 rounded-md border px-3 py-2 text-left transition',
-                    voiceDraft === option.id ? 'border-accent bg-accent/10 text-text' : 'border-border bg-[#0f1217] text-muted hover:border-accent/50 hover:text-text'
-                  )}
-                  onClick={() => setVoiceDraft(option.id)}
-                >
-                  <span className="block text-sm font-semibold">{option.label}</span>
-                  <span className="mt-1 block text-xs">{option.description[vi ? 'vi' : 'en']}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="grid gap-2">
-              <select
-                value={voiceDraft}
-                onChange={(event) => setVoiceDraft(event.target.value as TtsVoice)}
-                className="h-10 w-full rounded-md border border-border bg-[#0f1217] px-3 text-sm text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-              >
-                {activeVoiceOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label} · {option.description[vi ? 'vi' : 'en']}
-                  </option>
-                ))}
-              </select>
-              <div className="text-xs text-muted">
-                {selectedVoiceOption.label}: {selectedVoiceOption.description[vi ? 'vi' : 'en']}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="mb-5 grid gap-4 border-b border-border pb-5 md:grid-cols-[1fr_180px]">
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_210px]">
           <label className="grid gap-2 text-xs font-medium text-muted">
-            {vi ? 'Câu nghe thử' : 'Preview text'}
-            <textarea
-              value={previewText}
-              maxLength={500}
-              rows={3}
-              className="w-full rounded-md border border-border bg-[#0f1217] px-3 py-2 text-sm font-normal leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-              onChange={(event) => setPreviewText(event.target.value)}
-            />
+            {vi ? 'Giọng đọc' : 'Voice'}
+            <select
+              value={voiceDraft}
+              onChange={(event) => {
+                const nextVoice = event.target.value as TtsVoice;
+                setVoiceDraft(nextVoice);
+                queueLocalVideoSettings({ defaultVoice: nextVoice });
+              }}
+              className="h-10 w-full rounded-md border border-border bg-[#0f1217] px-3 text-sm font-normal text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+            >
+              {activeVoiceOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {compactVoiceLabel(option.id, option.label, option.description[vi ? 'vi' : 'en'])}
+                </option>
+              ))}
+            </select>
           </label>
-          <div className="grid content-between gap-3">
-            <label className="grid gap-2 text-xs font-medium text-muted">
-              <span className="flex items-center justify-between gap-2">
-                <span>{vi ? 'Tốc độ' : 'Speed'}</span>
-                <span className="text-text">{speedDraft.toFixed(2)}×</span>
-              </span>
+
+          <label className="grid gap-2 text-xs font-medium text-muted">
+            <span className="flex items-center justify-between gap-2">
+              <span>{vi ? 'Tốc độ' : 'Speed'}</span>
+              <span className="text-text">{speedDraft.toFixed(2)}×</span>
+            </span>
+            <span className="flex h-10 items-center">
               <input
                 type="range"
                 min={0.9}
@@ -1618,122 +1357,101 @@ function SettingsView({
                 onChange={(event) => updateSpeed(Number(event.target.value))}
                 className="h-2 w-full cursor-pointer accent-sky-300"
               />
-            </label>
-            <Button
-              icon={previewingVoice ? <LoaderCircle className="size-4 animate-spin" /> : <Volume2 className="size-4" />}
-              disabled={previewingVoice || !previewText.trim()}
-              onClick={previewVoice}
-            >
-              {previewingVoice ? (vi ? 'Đang tạo...' : 'Generating...') : (vi ? 'Nghe thử' : 'Preview voice')}
-            </Button>
-          </div>
+            </span>
+          </label>
         </div>
 
-        {previewStatus ? <div className="mb-4 text-xs text-sky-200">{previewStatus}</div> : null}
+        <div className="mt-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_150px] md:items-end">
+          <label className="grid gap-2 text-xs font-medium text-muted">
+            {vi ? 'Nghe thử' : 'Preview'}
+            <textarea
+              value={previewText}
+              maxLength={500}
+              rows={2}
+              className="min-h-16 w-full resize-y rounded-md border border-border bg-[#0f1217] px-3 py-2 text-sm font-normal leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+              onChange={(event) => setPreviewText(event.target.value)}
+            />
+          </label>
+          <Button
+            className="h-10"
+            icon={previewingVoice ? <LoaderCircle className="size-4 animate-spin" /> : <Volume2 className="size-4" />}
+            disabled={previewingVoice || !previewText.trim()}
+            onClick={previewVoice}
+          >
+            {previewingVoice ? (vi ? 'Đang tạo...' : 'Generating...') : (vi ? 'Nghe thử' : 'Preview')}
+          </Button>
+        </div>
 
-        <div className="grid gap-3">
-          {ttsKinds.map(({ kind, label }) => (
-            <div key={kind}>
-              <div className="mb-1 text-xs font-medium text-muted">{label}</div>
-              <textarea
-                value={ttsDrafts[kind]}
-                onChange={(event) => setTtsDrafts((current) => ({ ...current, [kind]: event.target.value }))}
-                rows={2}
-                className="w-full rounded-md border border-border bg-[#0f1217] px-3 py-2 text-sm text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-              />
-            </div>
-          ))}
-          <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
-            <div>
-              <div className="text-sm text-text">{copy.segmentSilenceLabel}</div>
-              <div className="mt-1 text-xs text-muted">{copy.segmentSilenceHelp}</div>
-            </div>
+        {previewStatus ? <div className="mt-2 text-xs text-sky-200">{previewStatus}</div> : null}
+
+        <div className="mt-5 flex items-center justify-between gap-4 border-t border-border pt-4">
+          <div className="text-sm text-text">{vi ? 'Khoảng nghỉ' : 'Pause between segments'}</div>
+          <label className="flex items-center gap-2 text-xs text-muted">
             <Input
               type="number"
               min={0}
               max={1500}
               step={50}
               value={silenceDraft}
-              onChange={(event) => setSilenceDraft(Number(event.target.value))}
-              className="w-28 text-right"
-            />
-          </div>
-          <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
-            <div>
-              <div className="text-sm text-text">{copy.karaokeCaptions}</div>
-              <div className="mt-1 text-xs text-muted">{copy.karaokeCaptionsHelp}</div>
-            </div>
-            <button
-              aria-label={copy.karaokeCaptions}
-              onClick={() => onSave({ karaokeCaptionsEnabled: !settings?.karaokeCaptionsEnabled })}
-              className={cn('h-5 w-9 shrink-0 rounded-full p-0.5 transition', settings?.karaokeCaptionsEnabled ? 'bg-success' : 'bg-border')}
-            >
-              <span className={cn('block size-4 rounded-full bg-white transition', settings?.karaokeCaptionsEnabled ? 'translate-x-4' : 'translate-x-0')} />
-            </button>
-          </div>
-          <div>
-            <Button
-              variant="primary"
-              disabled={savingVoice}
-              onClick={async () => {
-                setSavingVoice(true);
-                await onSave({
-                  ttsProvider: ttsProviderDraft,
-                  defaultVoice: voiceDraft,
-                  defaultSpeed: speedDraft,
-                  ttsInstructions: ttsDrafts,
-                  segmentSilenceMs: silenceDraft
-                });
-                setSavingVoice(false);
+              onChange={(event) => {
+                const nextSilence = Math.round(Math.min(Math.max(Number(event.target.value) || 0, 0), 1500));
+                setSilenceDraft(nextSilence);
+                queueLocalVideoSettings({ segmentSilenceMs: nextSilence });
               }}
-            >
-              {savingVoice ? copy.saving : copy.save}
-            </Button>
-          </div>
+              className="w-24 text-right"
+            />
+            ms
+          </label>
         </div>
+
+        <details className="mt-4 border-t border-border pt-3 text-xs text-muted">
+          <summary className="cursor-pointer select-none font-medium hover:text-text">
+            {vi ? 'Chi tiết kỹ thuật' : 'Technical details'}
+          </summary>
+          <dl className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-[110px_1fr]">
+            <dt>Model</dt><dd className="text-slate-300">vieneu-v3-turbo-onnx-int8</dd>
+            <dt>Runtime</dt><dd className="text-slate-300">{localTtsStatus?.backend ?? 'ONNX int8 / CPU'}</dd>
+            <dt>Version</dt><dd className="text-slate-300">{localTtsStatus?.version ?? '—'}</dd>
+            <dt>Cache</dt><dd className="text-emerald-200">{vi ? 'Đang bật' : 'Enabled'}</dd>
+          </dl>
+        </details>
       </div>
 
       <div className="rounded-lg border border-border bg-panel p-5">
-        <div className="mb-2 text-base font-semibold text-text">{copy.pricingTable}</div>
-        <div className="mb-4 text-sm text-muted">{copy.pricingTableHelp}</div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
-            {copy.dailyCostLimit}
-            <Input type="number" min={0} step={0.5} value={String(dailyLimitDraft)} onChange={(event) => setDailyLimitDraft(Math.max(0, Number(event.target.value) || 0))} />
-          </label>
-          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
-            {`Chat input ($/1M tokens · ${settings?.openAiModel ?? ''})`}
-            <Input type="number" min={0} step={0.05} value={String(pricingDraft.chatInPerM)} onChange={(event) => setPricingDraft({ ...pricingDraft, chatInPerM: Math.max(0, Number(event.target.value) || 0) })} />
-          </label>
-          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
-            {`Chat output ($/1M tokens · ${settings?.openAiModel ?? ''})`}
-            <Input type="number" min={0} step={0.05} value={String(pricingDraft.chatOutPerM)} onChange={(event) => setPricingDraft({ ...pricingDraft, chatOutPerM: Math.max(0, Number(event.target.value) || 0) })} />
-          </label>
-          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
-            TTS ($/1M chars)
-            <Input type="number" min={0} step={0.5} value={String(pricingDraft.ttsPerMillionChars)} onChange={(event) => setPricingDraft({ ...pricingDraft, ttsPerMillionChars: Math.max(0, Number(event.target.value) || 0) })} />
-          </label>
-          <label className="grid gap-1.5 text-[11px] font-medium text-muted">
-            Whisper ($/phút)
-            <Input type="number" min={0} step={0.001} value={String(pricingDraft.whisperPerMinute)} onChange={(event) => setPricingDraft({ ...pricingDraft, whisperPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
-          </label>
+        <div className="mb-1 text-base font-semibold text-text">{vi ? 'Ứng dụng & dữ liệu' : 'Application & data'}</div>
+        <div className="mb-4 text-sm text-muted">
+          {vi ? 'Kiểm tra nhanh các thành phần quan trọng và mở thư mục dữ liệu.' : 'Check essential components and open the application data folder.'}
         </div>
-        <Button
-          className="mt-4"
-          variant="primary"
-          disabled={savingCosts}
-          onClick={async () => {
-            setSavingCosts(true);
-            await onSave({ dailyCostLimitUsd: dailyLimitDraft, pricing: pricingDraft });
-            setSavingCosts(false);
-          }}
-        >
-          {savingCosts ? copy.saving : copy.save}
+        <div className="grid gap-2 text-sm sm:grid-cols-3">
+          <div className="rounded-md border border-border bg-[#0f1217] p-3">
+            <div className="text-xs text-muted">Database</div>
+            <div className="mt-1 font-medium text-emerald-200">{settings ? (vi ? 'Đang hoạt động' : 'Available') : (vi ? 'Đang tải' : 'Loading')}</div>
+          </div>
+          <div className="rounded-md border border-border bg-[#0f1217] p-3">
+            <div className="text-xs text-muted">{vi ? 'Clip nền' : 'Background clips'}</div>
+            <div className="mt-1 font-medium text-text">{assetCount}</div>
+          </div>
+          <div className="rounded-md border border-border bg-[#0f1217] p-3">
+            <div className="text-xs text-muted">VieNeu</div>
+            <div className={cn('mt-1 font-medium', localTtsStatus?.ok ? 'text-emerald-200' : 'text-amber-200')}>
+              {localTtsStatus?.ok ? (vi ? 'Sẵn sàng' : 'Ready') : (vi ? 'Cần kiểm tra' : 'Check required')}
+            </div>
+          </div>
+        </div>
+        <Button className="mt-4" icon={<FolderOpen className="size-4" />} onClick={() => void window.desktopAPI?.openDataFolder()}>
+          {vi ? 'Mở thư mục data' : 'Open data folder'}
         </Button>
       </div>
 
     </div>
   );
+}
+
+function compactVoiceLabel(id: TtsVoice, label: string, description: string) {
+  const displayName = id === 'Ngoc-Huyen-Clone' ? 'Ngọc Huyền' : label;
+  const parts = description.split(' · ').map((part) => part.trim()).filter(Boolean);
+  const qualifier = id === 'Ngoc-Huyen-Clone' ? parts.at(-1) : parts[0];
+  return qualifier ? `${displayName} — ${qualifier}` : displayName;
 }
 
 function SettingsToggle({
@@ -1763,56 +1481,6 @@ function SettingsToggle({
       >
         <span className={cn('block size-5 rounded-full bg-white transition', checked ? 'translate-x-5' : 'translate-x-0')} />
       </button>
-    </div>
-  );
-}
-
-function ModelSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const selected = openAIModelOptions.find((option) => option.id === value) ?? openAIModelOptions[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener('pointerdown', onPointerDown);
-    return () => window.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
-
-  return (
-    <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className="flex h-10 w-full items-center justify-between gap-3 rounded-md border border-border bg-[#0f1217] px-3 text-left text-sm text-text outline-none transition hover:border-accent/70 focus:border-accent focus:ring-2 focus:ring-accent/20"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="truncate">{selected.label} - {formatModelPrice(selected)}</span>
-        <ChevronDown className={cn('size-4 shrink-0 text-muted transition', open && 'rotate-180')} />
-      </button>
-      {open ? (
-        <div role="listbox" className="absolute inset-x-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-md border border-border bg-[#0f1217] p-1 shadow-2xl">
-          {openAIModelOptions.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              role="option"
-              aria-selected={option.id === value}
-              className={cn('flex w-full items-center justify-between gap-3 rounded px-2.5 py-2 text-left text-sm transition hover:bg-panelSoft', option.id === value ? 'bg-panelSoft text-text' : 'text-muted')}
-              onClick={() => {
-                onChange(option.id);
-                setOpen(false);
-              }}
-            >
-              <span className="min-w-0 truncate">{option.label} - {formatModelPrice(option)}</span>
-              {option.badge ? <span className="inline-flex h-5 shrink-0 items-center rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 text-[11px] font-medium text-emerald-200">🔥 Recommended</span> : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
     </div>
   );
 }

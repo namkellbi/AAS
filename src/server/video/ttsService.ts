@@ -25,7 +25,6 @@ import {
   getOpenAiApiKey,
   logApiUsage
 } from '@/server/db/client';
-import { normalizeVietnameseSpeechBatch } from '@/server/video/speechNormalizationService';
 import { synthesizeVieneuLocal } from '@/server/video/vieneuLocalService';
 import { withRetry } from '@/server/utils/withRetry';
 
@@ -281,10 +280,7 @@ export async function createTtsPreview(request: TtsPreviewRequest): Promise<TtsP
     };
   }
 
-  const openAiApiKey = getOpenAiApiKey();
-  const [input] = openAiApiKey
-    ? await normalizeVietnameseSpeechBatch([source], openAiApiKey)
-    : [normalizeVietnameseForSpeech(source)];
+  const input = normalizeVietnameseForSpeech(source);
 
   const previewDir = path.resolve(process.cwd(), 'data', 'tts-previews');
   fs.mkdirSync(previewDir, { recursive: true });

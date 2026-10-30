@@ -117,7 +117,7 @@ export function isTtsVoiceForProvider(provider: TtsProvider, voice: unknown): vo
 
 export function getDefaultVoiceForProvider(provider: TtsProvider): TtsVoice {
   if (provider === 'gemini') return 'Leda';
-  if (provider === 'vieneu') return 'Trúc Ly';
+  if (provider === 'vieneu') return 'Ngoc-Huyen-Clone';
   return 'nova';
 }
 

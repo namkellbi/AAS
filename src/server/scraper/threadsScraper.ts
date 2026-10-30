@@ -234,20 +234,27 @@ export function detectThreadsAccountName(): string | undefined {
 }
 
 async function extractAccountNameFromPage(page: Page) {
-  const accountFromLink = await page.evaluate(() => {
-    const profileLabel = /^(?:profile|trang cá nhân)$/i;
+  const accountFromLink = await page.waitForFunction(() => {
     for (const anchor of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
       const labels = [
         anchor.getAttribute('aria-label') ?? '',
         anchor.textContent ?? '',
         ...Array.from(anchor.querySelectorAll<HTMLElement>('[aria-label]')).map((element) => element.getAttribute('aria-label') ?? '')
       ];
-      if (!labels.some((label) => profileLabel.test(label.replace(/\s+/g, ' ').trim()))) continue;
-      const match = anchor.href.match(/threads\.(?:com|net)\/@([A-Za-z0-9._]+)\/?(?:[?#].*)?$/i);
+      const normalizedLabel = labels
+        .join(' ')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, '');
+      // Threads can expose the same accessible label on nested elements,
+      // producing values such as "ProfileProfile" in textContent.
+      if (!/^(?:profile)+$/.test(normalizedLabel) && !/^(?:trangcanhan)+$/.test(normalizedLabel)) continue;
+      const match = new URL(anchor.href, location.href).pathname.match(/^\/@([A-Za-z0-9._]+)\/?$/);
       if (match?.[1]) return match[1];
     }
-    return undefined;
-  });
+    return false;
+  }, undefined, { timeout: 15_000 }).then((handle) => handle.jsonValue() as Promise<string>).catch(() => undefined);
   if (accountFromLink) return accountFromLink;
 
   const profileControl = page
@@ -493,8 +500,16 @@ async function fetchTopReplies(
       // from the reply permalink and take the smallest ancestor that contains
       // the reply text plus its own Like control.
       let container: HTMLElement | null = null;
+      const pressable = anchor.closest<HTMLElement>('[data-pressable-container="true"]');
+      if (pressable) {
+        const directPermalink = Array.from(pressable.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
+          .find((candidate) => candidate.querySelector('time[datetime]'));
+        const directPostId = directPermalink?.href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1];
+        const text = pressable.innerText?.trim() ?? '';
+        if (directPostId === match[2] && text.length >= 20 && text.length <= 2500) container = pressable;
+      }
       let current: HTMLElement | null = anchor;
-      for (let depth = 0; current && depth < 14; depth += 1) {
+      for (let depth = 0; !container && current && depth < 14; depth += 1) {
         const text = current.innerText?.trim() ?? '';
         if (text.length >= 20 && text.length <= 2500 && current.querySelector('svg[aria-label="Like"]')) {
           container = current;
@@ -1161,6 +1176,21 @@ async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPos
       .filter((anchor) => anchor.href.includes(`/post/${postId}`));
     let container: HTMLElement | null = null;
     for (const permalink of permalinks) {
+      const pressable = permalink.closest<HTMLElement>('[data-pressable-container="true"]');
+      if (pressable) {
+        const pressablePostIds = new Set(
+          Array.from(pressable.querySelectorAll<HTMLAnchorElement>('a[href*="/post/"]'))
+            .map((anchor) => anchor.href.match(/\/post\/([A-Za-z0-9_-]+)/)?.[1])
+            .filter(Boolean)
+        );
+        const text = pressable.innerText?.trim() ?? '';
+        const hasTimestamp = Boolean(pressable.querySelector('time[datetime]'));
+        if (text.length >= 20 && text.length <= 3000 && hasTimestamp && pressablePostIds.size === 1) {
+          container = pressable;
+          break;
+        }
+      }
+
       let candidate: HTMLElement | null = null;
       let current: HTMLElement | null = permalink;
       for (let depth = 0; current && depth < 16; depth += 1) {
@@ -1171,9 +1201,12 @@ async function extractPermalinkPost(page: Page, postUrl: string): Promise<RawPos
         );
         const text = current.innerText?.trim() ?? '';
         const hasActions = Boolean(current.querySelector('svg[aria-label="Like"], svg[aria-label="Unlike"]'));
+        const hasTimestamp = Boolean(current.querySelector('time[datetime]'));
         // Pick the complete root card (text + actions + media), but stop before
         // the ancestor grows into the replies/conversation container.
-        if (text.length >= 20 && text.length <= 3000 && hasActions && postIds.size === 1) candidate = current;
+        if (text.length >= 20 && text.length <= 3000 && hasTimestamp && (hasActions || postIds.size === 1) && postIds.size === 1) {
+          candidate = current;
+        }
         if (postIds.size > 1 && candidate) break;
         current = current.parentElement;
       }

@@ -2,17 +2,17 @@
   "name": "threads-affiliate-trend-finder",
   "version": "0.1.0",
   "private": true,
-  "description": "Desktop research app for discovering trending Threads posts and generating AI affiliate product ideas.",
+  "description": "Desktop research app for discovering trending Threads posts and generating affiliate videos.",
   "main": "dist/electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"next dev -p 3000\" \"tsup src/electron/main.ts src/electron/preload.ts --format cjs --platform node --out-dir dist/electron --external electron --external better-sqlite3 --external playwright --external openai --watch\" \"wait-on tcp:3000 file:dist/electron/main.js && electron .\"",
+    "dev": "concurrently -k \"next dev -p 3000\" \"tsup src/electron/main.ts src/electron/preload.ts --format cjs --platform node --out-dir dist/electron --external electron --external better-sqlite3 --external playwright --external openai --watch\" \"wait-on tcp:3000 file:dist/electron/main.js && node scripts/launch-electron.cjs\"",
     "build": "next build && tsup src/electron/main.ts src/electron/preload.ts --format cjs --platform node --out-dir dist/electron --external electron --external better-sqlite3 --external playwright --external openai",
-    "start": "electron .",
+    "start": "node scripts/launch-electron.cjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:tiktok-caption": "tsx --test src/lib/tiktokCaption.test.ts",
     "lint": "next lint",
-    "db:init": "npm rebuild better-sqlite3 && tsx src/server/db/init.ts && npm run electron:rebuild",
+    "db:init": "pnpm rebuild better-sqlite3 && tsx src/server/db/init.ts && pnpm electron:rebuild",
     "scraper:install": "playwright install chromium",
     "electron:rebuild": "electron-rebuild -f -w better-sqlite3"
   },
@@ -44,5 +44,14 @@
     "tsx": "^4.16.2",
     "typescript": "^5.5.3",
     "wait-on": "^7.2.0"
+  },
+  "packageManager": "pnpm@10.18.3",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "unrs-resolver"
+    ]
   }
 }

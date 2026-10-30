@@ -14,7 +14,6 @@ export function CreateVideoHome({
   creativeAiEnabled,
   isCreatingFromLink,
   language,
-  openAiReady,
   threadsReady,
   onCreateFromLink,
   onCreateLinkUrl,
@@ -26,14 +25,13 @@ export function CreateVideoHome({
   creativeAiEnabled: boolean;
   isCreatingFromLink: boolean;
   language: 'en' | 'vi';
-  openAiReady: boolean;
   threadsReady: boolean;
   onCreateFromLink: () => void;
   onCreateLinkUrl: (url: string) => void;
   onNavigateSettings: () => void;
 }) {
   const vi = language === 'vi';
-  const setupReady = openAiReady && threadsReady;
+  const setupReady = threadsReady;
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-8 pb-8">

@@ -70,8 +70,6 @@ export function TikTokBriefModal({
   const matchedDemoPath = matchedProduct?.demoAssetId ? assets.find((asset) => asset.id === matchedProduct.demoAssetId)?.filePath ?? '' : '';
   const [productClipPath, setProductClipPath] = useState(matchedDemoPath);
   const [variants, setVariants] = useState<VideoDraftVariant[]>([]);
-  const [normalizingSpeech, setNormalizingSpeech] = useState(false);
-  const [speechNormalizationError, setSpeechNormalizationError] = useState('');
   const [deletedReply, setDeletedReply] = useState<{ reply: ReturnType<typeof topLikedReplies>[number]; index: number } | null>(null);
   const [draggedReplyIndex, setDraggedReplyIndex] = useState<number | null>(null);
   const [dragOverReplyIndex, setDragOverReplyIndex] = useState<number | null>(null);
@@ -125,23 +123,6 @@ export function TikTokBriefModal({
       ...variants,
       { label: `variant-${index}`, hookText: analysis.hooks[index] ?? '', ctaText: analysis.ctas[index] ?? '' }
     ]);
-  }
-
-  async function normalizeSpeechWithAi() {
-    const api = window.desktopAPI;
-    if (!api || normalizingSpeech) return;
-    setNormalizingSpeech(true);
-    setSpeechNormalizationError('');
-    try {
-      const originals = [postText, ...replies.map((reply) => reply.content)];
-      const normalized = await api.normalizeSpeech(originals, post.id);
-      setPostTtsText(normalized[0] || postText);
-      setReplyTtsTexts(Object.fromEntries(replies.map((reply, index) => [replyKey(reply), normalized[index + 1] || reply.content])));
-    } catch (error) {
-      setSpeechNormalizationError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setNormalizingSpeech(false);
-    }
   }
 
   function importSpeechEditor(value: string) {
@@ -369,12 +350,8 @@ export function TikTokBriefModal({
             </div>
             {!useOriginalPostReadOnly ? <label className="grid gap-2 text-xs text-muted">{copy.hookOpening}<textarea className="min-h-20 rounded-md border border-border bg-background p-3 text-sm text-text" value={hookText} onChange={(event) => setHookText(event.target.value)} /></label> : null}
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs text-muted">Chỉnh toàn bộ lời đọc trong một editor. Các tiêu đề phân đoạn được giữ cố định để render đúng thứ tự.</div>
-              <Button className="h-9" icon={<Lightbulb className="size-4" />} disabled={normalizingSpeech} onClick={normalizeSpeechWithAi}>
-                {normalizingSpeech ? 'Đang chuẩn hóa...' : 'Chuẩn hóa tất cả bằng AI'}
-              </Button>
+              <div className="text-xs text-muted">Chỉnh toàn bộ lời đọc trong một editor. Tool sẽ đọc đúng nội dung đã duyệt và không tự gọi AI.</div>
             </div>
-            {speechNormalizationError ? <div className="mt-2 text-xs text-red-300">{speechNormalizationError}</div> : null}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button icon={<ClipboardCopy className="size-4" />} onClick={() => void copyForChatGpt()}>Copy cho ChatGPT</Button>
               <Button icon={<ClipboardPaste className="size-4" />} onClick={() => void pasteFromChatGpt()}>Dán kết quả</Button>

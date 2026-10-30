@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getConfig } from '@/server/config';
 import { postAnalysisSignature } from '@/server/db/postAnalysisSignature';
 import { schema } from '@/server/db/schema';
-import { defaultCreativeAiEnabled, defaultFeatureVisibility } from '@/lib/content-mode';
+import { defaultFeatureVisibility } from '@/lib/content-mode';
 import { defaultKeywords } from '@/lib/default-keywords';
 import { recommendedOpenAIModel } from '@/lib/openai-models';
 import { defaultPricing, fallbackChatPricing, type PricingConfig } from '@/lib/pricing';
@@ -13,7 +13,7 @@ import { sanitizeThreadsPostImageUrls } from '@/lib/threadsMedia';
 import { getDefaultVoiceForProvider, isTtsVoiceForProvider } from '@/lib/tts';
 import { detectThreadsAccountName, hasStoredThreadsAuthSession } from '@/server/scraper/threadsScraper';
 import { scorePost } from '@/server/scoring/trendingScore';
-import type { AIAnalysis, ApiUsageKind, AssetLibraryItem, AssetType, ContentGoal, FeatureVisibility, Keyword, KeywordExclusion, KeywordInsight, Product, ReadinessThresholds, SavedPost, ThreadsPost, ThreadsReply, TrendState, TtsProvider, TtsSegmentKind, TtsVoice, UploadLogEntry, UsageSummary } from '@/lib/types';
+import type { AIAnalysis, ApiUsageKind, AssetLibraryItem, AssetType, ContentGoal, FeatureVisibility, Keyword, KeywordExclusion, KeywordInsight, Product, ReadinessThresholds, SavedPost, ThreadsPost, ThreadsReply, TrendState, TtsProvider, TtsVoice, UploadLogEntry, UsageSummary } from '@/lib/types';
 import { clamp, nowIso } from '@/lib/utils';
 
 let db: Database.Database | null = null;
@@ -116,7 +116,113 @@ function migrateSchema(database: Database.Database) {
     .prepare("DELETE FROM app_settings WHERE key IN ('video.auto_send_to_queue', 'app.allow_demo_mode', 'elevenlabs.api_key', 'elevenlabs.voice_id')")
     .run();
   database.prepare("DELETE FROM app_settings WHERE key LIKE 'openai.local_%'").run();
+  migrateLocalVideoDefaults(database);
+  reconcileMovedResourceAssets(database);
   database.exec('CREATE INDEX IF NOT EXISTS idx_threads_posts_opportunity ON threads_posts(opportunity_score DESC)');
+}
+
+function migrateLocalVideoDefaults(database: Database.Database) {
+  const migrationKey = 'migration.local_video_defaults_v2';
+  const migrated = database.prepare('SELECT value FROM app_settings WHERE key = ?').get(migrationKey) as { value: string } | undefined;
+  if (migrated?.value === 'true') return;
+
+  const upsert = database.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `);
+  const migrate = database.transaction(() => {
+    upsert.run('video.tts_provider', 'vieneu', nowIso());
+    upsert.run('video.karaoke_captions_enabled', 'false', nowIso());
+    upsert.run('features.creative_ai', 'false', nowIso());
+    upsert.run(migrationKey, 'true', nowIso());
+  });
+  migrate();
+}
+
+function reconcileMovedResourceAssets(database: Database.Database) {
+  const resourcesDir = path.resolve(process.cwd(), 'data', 'video-resources');
+  if (!fs.existsSync(resourcesDir)) return;
+
+  const currentFiles = new Map(
+    fs.readdirSync(resourcesDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => [entry.name.toLocaleLowerCase(), normalizeAssetPath(path.join(resourcesDir, entry.name))] as const)
+  );
+  if (!currentFiles.size) return;
+
+  const rows = database.prepare('SELECT * FROM asset_library').all() as Array<Record<string, unknown>>;
+  const findCurrent = database.prepare('SELECT * FROM asset_library WHERE lower(file_path) = lower(?) AND id <> ?');
+  const mergeCurrent = database.prepare(`
+    UPDATE asset_library
+    SET type = ?, label = ?, duration_secs = ?,
+        times_used = times_used + ?,
+        last_used_at = CASE
+          WHEN last_used_at IS NULL THEN ?
+          WHEN ? IS NULL THEN last_used_at
+          WHEN last_used_at >= ? THEN last_used_at
+          ELSE ?
+        END
+    WHERE id = ?
+  `);
+  const updatePath = database.prepare('UPDATE asset_library SET file_path = ? WHERE id = ?');
+  const remove = database.prepare('DELETE FROM asset_library WHERE id = ?');
+
+  const reconcile = database.transaction(() => {
+    for (const row of rows) {
+      const oldPath = String(row.file_path ?? '');
+      if (path.basename(path.dirname(oldPath)).toLocaleLowerCase() !== 'video-resources') continue;
+
+      const currentPath = currentFiles.get(path.basename(oldPath).toLocaleLowerCase());
+      if (!currentPath || assetPathKey(oldPath) === assetPathKey(currentPath)) continue;
+
+      const existing = findCurrent.get(currentPath, String(row.id)) as Record<string, unknown> | undefined;
+      if (!existing) {
+        updatePath.run(currentPath, String(row.id));
+        continue;
+      }
+
+      const oldLastUsedAt = typeof row.last_used_at === 'string' ? row.last_used_at : null;
+      mergeCurrent.run(
+        String(existing.type),
+        String(existing.label),
+        Number(existing.duration_secs),
+        Number(row.times_used ?? 0),
+        oldLastUsedAt,
+        oldLastUsedAt,
+        oldLastUsedAt,
+        oldLastUsedAt,
+        String(existing.id)
+      );
+      remove.run(String(row.id));
+      mergeAssetThumbnail(String(row.id), String(existing.id));
+    }
+  });
+  reconcile();
+}
+
+function mergeAssetThumbnail(removedId: string, keptId: string) {
+  const thumbnailDir = path.resolve(process.cwd(), 'data', 'video-thumbnails');
+  const removedPath = path.join(thumbnailDir, `${removedId}.jpg`);
+  if (!fs.existsSync(removedPath)) return;
+  const keptPath = path.join(thumbnailDir, `${keptId}.jpg`);
+  if (fs.existsSync(keptPath)) fs.rmSync(removedPath, { force: true });
+  else fs.renameSync(removedPath, keptPath);
+}
+
+function normalizeAssetPath(filePath: string) {
+  const resolved = path.resolve(filePath);
+  if (!fs.existsSync(resolved)) return resolved;
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function assetPathKey(filePath: string) {
+  const normalized = normalizeAssetPath(filePath);
+  return process.platform === 'win32' ? normalized.toLocaleLowerCase() : normalized;
 }
 
 function ensureColumn(database: Database.Database, table: string, column: string, definition: string) {
@@ -728,8 +834,7 @@ export function getGeminiApiKey() {
 }
 
 export function getTtsProvider(): TtsProvider {
-  const provider = getSetting('video.tts_provider');
-  return provider === 'gemini' || provider === 'vieneu' ? provider : 'openai';
+  return 'vieneu';
 }
 
 export function getAutoScanEnabled() {
@@ -746,8 +851,7 @@ export function getScanOnLaunch() {
 }
 
 export function getCreativeAiEnabled() {
-  const value = getSetting('features.creative_ai');
-  return value === null ? defaultCreativeAiEnabled : value === 'true';
+  return false;
 }
 
 export function getFeatureVisibility(): FeatureVisibility {
@@ -784,50 +888,11 @@ export function getTransitionSoundEnabled() {
   return getSetting('video.transition_sound_enabled') === 'true';
 }
 
-export const defaultTtsInstructions: Record<TtsSegmentKind, string> = {
-  hook: 'Đọc nhanh, punchy, giọng gây tò mò như đang mở đầu một chuyện hay. Không tự thêm hoặc bớt nội dung.',
-  post: 'Đọc tự nhiên, rõ ràng; nhịp độ tuân theo cài đặt tốc độ. Chỉ ngắt nghỉ theo dấu câu và không kéo dài từ. Không tự thêm hoặc bớt nội dung.',
-  reply: 'Đọc nhẹ nhàng, tự nhiên như đang đọc bình luận cho bạn nghe. Không tự thêm hoặc bớt nội dung.',
-  transition: 'Đọc với tông chuyển nhẹ nhàng, như vừa phát hiện ra điều gì đó. Không tự thêm hoặc bớt nội dung.',
-  solution: 'Đọc ấm áp, thuyết phục nhưng thư giãn, tuyệt đối không gào hay lên gân bán hàng. Không tự thêm hoặc bớt nội dung.',
-  cta: 'Đọc ấm, thân thiện, low-pressure như một lời rủ nhẹ nhàng. Không tự thêm hoặc bớt nội dung.'
-};
-
-export function getTtsInstructions(): Record<TtsSegmentKind, string> {
-  const stored = jsonParse<Partial<Record<TtsSegmentKind, string>>>(getSetting('video.tts_instructions') ?? '{}', {});
-  const merged = { ...defaultTtsInstructions };
-  for (const kind of Object.keys(merged) as TtsSegmentKind[]) {
-    const value = stored[kind];
-    if (typeof value === 'string' && value.trim()) merged[kind] = value.trim();
-  }
-  return merged;
-}
-
-export function getTtsInstruction(kind: TtsSegmentKind): string {
-  return getTtsInstructions()[kind];
-}
-
-export function setTtsInstructions(overrides: Partial<Record<TtsSegmentKind, string>>) {
-  const stored = jsonParse<Partial<Record<TtsSegmentKind, string>>>(getSetting('video.tts_instructions') ?? '{}', {});
-  const next: Partial<Record<TtsSegmentKind, string>> = { ...stored };
-  for (const kind of Object.keys(defaultTtsInstructions) as TtsSegmentKind[]) {
-    const value = overrides[kind];
-    if (typeof value !== 'string') continue;
-    if (value.trim() && value.trim() !== defaultTtsInstructions[kind]) next[kind] = value.trim();
-    else delete next[kind];
-  }
-  setSetting('video.tts_instructions', JSON.stringify(next));
-}
-
 export function getSegmentSilenceMs() {
   const stored = getSetting('video.segment_silence_ms');
   if (stored === null) return 400;
   const value = Number(stored);
   return Number.isFinite(value) ? Math.round(clamp(value, 0, 1500)) : 400;
-}
-
-export function getKaraokeCaptionsEnabled() {
-  return getSetting('video.karaoke_captions_enabled') !== 'false';
 }
 
 export function getScanGoal(): ContentGoal {
@@ -892,7 +957,8 @@ export function getAsset(id: string): AssetLibraryItem | null {
 }
 
 export function addAsset(type: AssetType, filePath: string, durationSecs: number, label?: string): AssetLibraryItem {
-  const existing = getDb().prepare('SELECT * FROM asset_library WHERE file_path = ?').get(filePath) as Record<string, unknown> | undefined;
+  const normalizedPath = normalizeAssetPath(filePath);
+  const existing = getDb().prepare('SELECT * FROM asset_library WHERE lower(file_path) = lower(?)').get(normalizedPath) as Record<string, unknown> | undefined;
   if (existing) {
     if (label && label !== String(existing.label)) {
       getDb().prepare('UPDATE asset_library SET label = ?, type = ?, duration_secs = ? WHERE id = ?').run(label, type, durationSecs, String(existing.id));
@@ -903,8 +969,8 @@ export function addAsset(type: AssetType, filePath: string, durationSecs: number
   const item: AssetLibraryItem = {
     id: crypto.randomUUID(),
     type,
-    label: label ?? path.basename(filePath, path.extname(filePath)),
-    filePath,
+    label: label ?? path.basename(normalizedPath, path.extname(normalizedPath)),
+    filePath: normalizedPath,
     durationSecs,
     timesUsed: 0
   };
@@ -918,7 +984,7 @@ export function deleteAsset(id: string) {
 
 export function markAssetUsed(filePath?: string) {
   if (!filePath) return;
-  getDb().prepare('UPDATE asset_library SET times_used = times_used + 1, last_used_at = ? WHERE file_path = ?').run(nowIso(), filePath);
+  getDb().prepare('UPDATE asset_library SET times_used = times_used + 1, last_used_at = ? WHERE lower(file_path) = lower(?)').run(nowIso(), normalizeAssetPath(filePath));
 }
 
 export function listProducts(status?: Product['status']): Product[] {
@@ -1198,9 +1264,7 @@ export function getAppSettings() {
     , defaultSpeed: getDefaultSpeed()
     , transitionSoundEnabled: getTransitionSoundEnabled()
     , postAgeHours: getPostAgeHours()
-    , ttsInstructions: getTtsInstructions()
     , segmentSilenceMs: getSegmentSilenceMs()
-    , karaokeCaptionsEnabled: getKaraokeCaptionsEnabled()
     , scanGoal: getScanGoal()
     , readinessThresholds: getReadinessThresholds()
     , dailyCostLimitUsd: getDailyCostLimitUsd()

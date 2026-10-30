@@ -6,12 +6,9 @@ import { chromium } from 'playwright';
 import { firstThreadsPostImageUrl } from '@/lib/threadsMedia';
 import { normalizeVietnameseForSpeech } from '@/lib/vietnamese-speech';
 import { getTtsModel } from '@/lib/tts';
-import type { AIAnalysis, Product, SelectedReply, ThreadsPost, TtsProvider, TtsSegmentKind, TtsVoice, VideoDraftProgress, VideoDraftResult, VideoDraftVariant } from '@/lib/types';
-import { getCreativeAiEnabled, getDefaultSpeed, getDefaultVoice, getGeminiApiKey, getKaraokeCaptionsEnabled, getOpenAiApiKey, getSegmentSilenceMs, getSetting, getTtsInstruction, getTtsProvider, setSetting } from '@/server/db/client';
+import type { AIAnalysis, Product, SelectedReply, ThreadsPost, TtsProvider, TtsVoice, VideoDraftProgress, VideoDraftResult, VideoDraftVariant } from '@/lib/types';
+import { getCreativeAiEnabled, getDefaultSpeed, getDefaultVoice, getSegmentSilenceMs, getSetting, getTtsProvider, setSetting } from '@/server/db/client';
 import { scrapeThreadsPostReplies } from '@/server/scraper/threadsScraper';
-import { buildKaraokeAss, ensureSubtitlesFilterAvailable, subtitlesFilterArg } from '@/server/video/subtitleService';
-import { normalizeVietnameseSpeechBatch } from '@/server/video/speechNormalizationService';
-import { getWordTimestamps } from '@/server/video/transcriptionService';
 import { synthesizeSpeech } from '@/server/video/ttsService';
 import { withRetry } from '@/server/utils/withRetry';
 
@@ -39,7 +36,6 @@ type Scene = {
   duration: number;
   imagePath?: string;
   outputPath: string;
-  assPath?: string;
   speechText: string;
 };
 
@@ -88,16 +84,8 @@ function safeJsonParse<T>(value: string): Partial<T> {
 }
 
 export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgress: (progress: VideoDraftProgress) => void = () => {}): Promise<VideoDraftResult> {
-  const openAiApiKey = getOpenAiApiKey();
   const ttsProvider = getTtsProvider();
-  const apiKey = ttsProvider === 'gemini'
-    ? getGeminiApiKey()
-    : ttsProvider === 'vieneu'
-      ? ''
-      : openAiApiKey;
-  if (ttsProvider !== 'vieneu' && !apiKey) {
-    throw new Error(`${ttsProvider === 'gemini' ? 'Gemini' : 'OpenAI'} API key is missing. Add it in Settings before generating a video voiceover.`);
-  }
+  const apiKey = '';
   if (!request.backgroundPath || !fs.existsSync(request.backgroundPath)) throw new Error('Background clip is missing. Select a valid clip from Asset Library before rendering.');
   const selectedBackgroundPath = request.backgroundPath;
   const backgroundDuration = await probeDuration(selectedBackgroundPath);
@@ -111,9 +99,6 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     : undefined;
   if (backgroundMusicEnabled && !selectedMusicPath) throw new Error('Không tìm thấy file nhạc nền hợp lệ trong data/background-music.');
   const useOriginalPostReadOnly = !getCreativeAiEnabled();
-  const karaokeEnabled = getKaraokeCaptionsEnabled();
-  if (karaokeEnabled && !openAiApiKey) throw new Error('OpenAI API key is required for Whisper karaoke timestamps. Add the key or turn off Karaoke caption.');
-  if (karaokeEnabled) await ensureSubtitlesFilterAvailable();
 
   const { exportDir, exportName } = allocateExportDirectory();
   const workDir = path.join(exportDir, '_work');
@@ -159,7 +144,7 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   const silenceSecs = getSegmentSilenceMs() / 1000;
   activePostId = request.post.id;
   pickTemplateRotation();
-  const ttsFor = (kind: TtsSegmentKind) => getTtsInstruction(kind);
+  const ttsFor = () => '';
   const speechEntries = [
     { source: hookText, manuallyEdited: false },
     { source: postTtsText, manuallyEdited: Boolean(request.speechTextsFinalized) || postTtsText.trim() !== postText.trim() },
@@ -174,42 +159,21 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
   // instruction. Do not let contextual AI reinterpret it (for example,
   // changing "Bộ Giáo dục" back into another expansion of "bgd").
   const normalizedSpeech = speechEntries.map((entry) => entry.manuallyEdited ? entry.source : normalizeVietnameseForSpeech(entry.source));
-  const automaticEntries = speechEntries
-    .map((entry, index) => ({ ...entry, index }))
-    .filter((entry) => !entry.manuallyEdited);
-  const automaticSpeech = await normalizeVietnameseSpeechBatch(
-    automaticEntries.map((entry) => entry.source),
-    openAiApiKey,
-    request.post.id
-  );
-  automaticEntries.forEach((entry, index) => {
-    normalizedSpeech[entry.index] = automaticSpeech[index];
-  });
   const speechBySource = new Map(speechSources.map((source, index) => [source, normalizedSpeech[index]]));
   const spokenText = (source: string) => speechBySource.get(source) ?? normalizeVietnameseForSpeech(source);
 
   onProgress({ percent: 16, message: `Đang tạo voiceover · ${voice} · tốc độ ${speed.toFixed(2)}x...` });
-  const hookScene = hookText ? await createTextScene(workDir, 'hook', hookText, apiKey, voice, speed, 2, ttsFor('hook'), karaokeEnabled ? 'native-hook' : 'card', spokenText(hookText)) : null;
-  const postScene = await createSpokenScene(workDir, 'post', postText, request.post, undefined, apiKey, voice, speed, ttsFor('post'), spokenText(postTtsText));
+  const hookScene = hookText ? await createTextScene(workDir, 'hook', hookText, apiKey, voice, speed, 2, ttsFor(), 'card', spokenText(hookText)) : null;
+  const postScene = await createSpokenScene(workDir, 'post', postText, request.post, undefined, apiKey, voice, speed, ttsFor(), spokenText(postTtsText));
   const replyScenes = await Promise.all(
-    replies.map((reply, index) => createSpokenScene(workDir, `reply-${index + 1}`, reply.content, request.post, reply, apiKey, voice, speed, ttsFor('reply'), spokenText(replyTtsTexts[index])))
+    replies.map((reply, index) => createSpokenScene(workDir, `reply-${index + 1}`, reply.content, request.post, reply, apiKey, voice, speed, ttsFor(), spokenText(replyTtsTexts[index])))
   );
-  const transitionScene = transitionLine ? await createTextScene(workDir, 'transition', transitionLine, apiKey, voice, speed, 2, ttsFor('transition'), karaokeEnabled ? 'none' : 'card', spokenText(transitionLine)) : null;
-  const solutionScene = solutionText ? await createTextScene(workDir, 'solution', solutionText, apiKey, voice, speed, 4, ttsFor('solution'), karaokeEnabled ? 'none' : 'card', spokenText(solutionText)) : null;
-  const outroScene = ctaText ? await createTextScene(workDir, 'outro', ctaText, apiKey, voice, speed, 3, ttsFor('cta'), karaokeEnabled ? 'none' : 'card', spokenText(ctaText)) : null;
+  const transitionScene = transitionLine ? await createTextScene(workDir, 'transition', transitionLine, apiKey, voice, speed, 2, ttsFor(), 'card', spokenText(transitionLine)) : null;
+  const solutionScene = solutionText ? await createTextScene(workDir, 'solution', solutionText, apiKey, voice, speed, 4, ttsFor(), 'card', spokenText(solutionText)) : null;
+  const outroScene = ctaText ? await createTextScene(workDir, 'outro', ctaText, apiKey, voice, speed, 3, ttsFor(), 'card', spokenText(ctaText)) : null;
 
   const scenes = [hookScene, postScene, ...replyScenes, transitionScene, solutionScene].filter((scene): scene is Scene => Boolean(scene));
 
-  if (karaokeEnabled) {
-    onProgress({ percent: 42, message: 'Đang tạo phụ đề karaoke...' });
-    for (const scene of [postScene, ...replyScenes, transitionScene, solutionScene, outroScene].filter((scene): scene is Scene => Boolean(scene))) {
-      const { words } = await getWordTimestamps(scene.audioPath, openAiApiKey, request.post.id, scene.speechText);
-      if (!words.length) continue;
-      const assPath = scene.audioPath.replace(/\.mp3$/i, '.ass');
-      fs.writeFileSync(assPath, buildKaraokeAss(words), 'utf8');
-      scene.assPath = assPath;
-    }
-  }
   onProgress({ percent: 48, message: 'Đang render từng segment độc lập...' });
   let backgroundOffsetSecs = 0;
   for (let index = 0; index < scenes.length; index += 1) {
@@ -262,17 +226,9 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     const variantCtaText = variant.ctaText.trim() || ctaText;
 
     const variantHook = variantHookText
-      ? await createTextScene(variantDir, 'hook', variantHookText, apiKey, voice, speed, 2, ttsFor('hook'), karaokeEnabled ? 'native-hook' : 'card')
+      ? await createTextScene(variantDir, 'hook', variantHookText, apiKey, voice, speed, 2, ttsFor(), 'card')
       : null;
-    const variantOutro = await createTextScene(variantDir, 'outro', variantCtaText, apiKey, voice, speed, 3, ttsFor('cta'), karaokeEnabled ? 'none' : 'card');
-    if (karaokeEnabled) {
-      const { words } = await getWordTimestamps(variantOutro.audioPath, openAiApiKey, request.post.id, variantOutro.speechText);
-      if (words.length) {
-        const assPath = variantOutro.audioPath.replace(/\.mp3$/i, '.ass');
-        fs.writeFileSync(assPath, buildKaraokeAss(words), 'utf8');
-        variantOutro.assPath = assPath;
-      }
-    }
+    const variantOutro = await createTextScene(variantDir, 'outro', variantCtaText, apiKey, voice, speed, 3, ttsFor(), 'card');
     if (variantHook) await renderOverlayScene(selectedBackgroundPath, variantHook, silenceSecs, 0, backgroundDuration);
     const originalHookSpan = hookScene ? hookScene.duration + silenceSecs : 0;
     const variantHookSpan = variantHook ? variantHook.duration + silenceSecs : 0;
@@ -468,18 +424,8 @@ async function renderOverlayScene(backgroundPath: string, scene: Scene, silenceS
   const filters = ['[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30[bg]'];
   let videoLabel = '[bg]';
   if (scene.imagePath) {
-    if (scene.assPath) {
-      // Karaoke mode: shrink the card and pin it to the upper area so captions own the lower third.
-      filters.push('[1:v]scale=880:-1[card]');
-      filters.push(`${videoLabel}[card]overlay=(W-w)/2:170[v0]`);
-    } else {
-      filters.push(`${videoLabel}[1:v]overlay=(W-w)/2:(H-h)/2[v0]`);
-    }
+    filters.push(`${videoLabel}[1:v]overlay=(W-w)/2:(H-h)/2[v0]`);
     videoLabel = '[v0]';
-  }
-  if (scene.assPath) {
-    filters.push(`${videoLabel}${subtitlesFilterArg(scene.assPath)}[v1]`);
-    videoLabel = '[v1]';
   }
   filters.push(`[${audioIndex}:a]apad[aout]`);
 
