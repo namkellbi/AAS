@@ -7,20 +7,18 @@ import { Filter, FolderOpen, Link2, LoaderCircle, LogIn, Play, RefreshCcw, Searc
 import { AnalysisPanel } from '@/components/analysis/analysis-panel';
 import { TikTokBriefModal } from '@/components/analysis/tiktok-brief-modal';
 import { CreateVideoHome } from '@/components/create-video/create-video-home';
-import { VideoReviewQueue } from '@/components/create-video/video-review-queue';
 import { FeedCard } from '@/components/feed/feed-card';
 import { KeywordManager } from '@/components/keywords/keyword-manager';
 import { Sidebar } from '@/components/layout/sidebar';
 import { OpportunityInbox } from '@/components/opportunities/opportunity-inbox';
 import { ProductsView } from '@/components/products/products-view';
-import { ResultsView } from '@/components/results/results-view';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { defaultFeatureVisibility } from '@/lib/content-mode';
 import { translations, type Language, type TranslationCopy } from '@/lib/i18n';
 import { filterUsefulReplies } from '@/lib/replies';
 import { getTtsVoiceOptions, isTtsVoiceForProvider } from '@/lib/tts';
-import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, CreateFromLinkProgress, FetchMode, GeneratedVideoItem, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, LocalTtsStatus, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, ThreadsPost, TtsVoice, UpdateSettingsRequest, UploadLogEntry, UsageSummary, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
+import type { AIAnalysis, AppSettings, AssetLibraryItem, AssetType, BatchCreateFromLinksItem, BatchCreateFromLinksProgress, BatchCreateFromLinksResult, CreateFromLinkProgress, FetchMode, GeneratedVideoItem, Keyword, KeywordDiscoveryRequest, KeywordDiscoveryResult, KeywordExclusion, KeywordInsight, LocalTtsStatus, NormalizationBackendStatus, OpportunityScanProgress, Product, QuotaBlockedResult, SavedPost, ServiceHealth, SpeechNormalizationResult, SpeechNormalizationState, ThreadsPost, TtsVoice, UpdateSettingsRequest, UploadLogEntry, VideoDraftProgress, VideoDraftRequest, VideoDraftResult } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 type VideoRenderSession = {
@@ -29,6 +27,19 @@ type VideoRenderSession = {
   rendering: boolean;
   progress: VideoDraftProgress | null;
   renderedVideoPath: string | null;
+};
+
+type ReviewedBatchDraft = {
+  request: VideoDraftRequest;
+  reviewed: boolean;
+};
+
+type BatchRenderState = {
+  running: boolean;
+  completed: number;
+  total: number;
+  currentPostId?: string;
+  failedPostIds: string[];
 };
 
 export default function HomePage() {
@@ -41,6 +52,7 @@ export default function HomePage() {
   const [keywordExclusions, setKeywordExclusions] = useState<KeywordExclusion[]>([]);
   const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [normalizationBackendStatus, setNormalizationBackendStatus] = useState<NormalizationBackendStatus | null>(null);
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -51,6 +63,19 @@ export default function HomePage() {
   const [createLinkUrl, setCreateLinkUrl] = useState('');
   const [isCreatingFromLink, setIsCreatingFromLink] = useState(false);
   const [createLinkProgress, setCreateLinkProgress] = useState<CreateFromLinkProgress | null>(null);
+  const [batchInput, setBatchInput] = useState('');
+  const [isCreatingBatch, setIsCreatingBatch] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<Record<number, BatchCreateFromLinksProgress>>({});
+  const [batchResult, setBatchResult] = useState<BatchCreateFromLinksResult | null>(null);
+  const [speechNormalizations, setSpeechNormalizations] = useState<Record<string, SpeechNormalizationState>>({});
+  const [isNormalizingBatch, setIsNormalizingBatch] = useState(false);
+  const [batchDrafts, setBatchDrafts] = useState<Record<string, ReviewedBatchDraft>>({});
+  const [batchRenderState, setBatchRenderState] = useState<BatchRenderState>({
+    running: false,
+    completed: 0,
+    total: 0,
+    failedPostIds: []
+  });
   const [briefInitialBackground, setBriefInitialBackground] = useState<string | undefined>(undefined);
   const [isScanning, setIsScanning] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
@@ -60,7 +85,6 @@ export default function HomePage() {
   const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideoItem[]>([]);
   const [uploadLogs, setUploadLogs] = useState<UploadLogEntry[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
   const [replyPost, setReplyPost] = useState<ThreadsPost | null>(null);
   const [loadingRepliesId, setLoadingRepliesId] = useState<string | null>(null);
   const [scanSummary, setScanSummary] = useState<{ newPosts: number; seenPosts: number } | null>(null);
@@ -83,9 +107,12 @@ export default function HomePage() {
     if (api) setSettings(await api.getSettings());
   }, []);
 
-  const refreshUsageSummary = useCallback(async () => {
+  const refreshNormalizationBackendStatus = useCallback(async () => {
     const api = window.desktopAPI;
-    if (api) setUsageSummary(await api.getUsageSummary());
+    if (!api) return null;
+    const status = await api.getNormalizationStatus();
+    setNormalizationBackendStatus(status);
+    return status;
   }, []);
 
   const refreshKeywordWorkspace = useCallback(async () => {
@@ -106,7 +133,17 @@ export default function HomePage() {
   const briefPost = briefPostId ? posts.find((post) => post.id === briefPostId) : undefined;
   const briefAnalysis = briefPost ? analysis[briefPost.id] : undefined;
   const briefVideoRenderSession = briefPost && videoRenderSession?.postId === briefPost.id ? videoRenderSession : null;
-  const briefRenderedVideoPath = briefVideoRenderSession?.renderedVideoPath ?? null;
+  const generatedVideoByPostId = useMemo(() => {
+    const videos = new Map<string, GeneratedVideoItem>();
+    generatedVideos.forEach((video) => {
+      if (!videos.has(video.postId)) videos.set(video.postId, video);
+    });
+    return videos;
+  }, [generatedVideos]);
+  const briefGeneratedVideo = briefPost ? generatedVideoByPostId.get(briefPost.id) : undefined;
+  const briefRenderedVideoPath = briefVideoRenderSession?.renderedVideoPath ?? briefGeneratedVideo?.filePath ?? null;
+  const briefRenderProgress = briefVideoRenderSession?.progress
+    ?? (briefGeneratedVideo ? { percent: 100, message: 'Đã tạo xong video.' } : null);
   const savedIds = useMemo(() => new Set(savedPosts.map((item) => item.postId)), [savedPosts]);
   const activeKeywords = keywords.filter((keyword) => keyword.enabled);
   const shouldShowFeedTools = featureVisibility.opportunityDiscovery && (activeView === 'trending' || activeView === 'saved');
@@ -172,7 +209,6 @@ export default function HomePage() {
         setSelectedId(post.id);
         if (post.keyword) await refreshKeywordWorkspace();
         await refreshSettings();
-        await refreshUsageSummary();
       }
       return result ?? null;
     } catch (analyzeError) {
@@ -181,7 +217,7 @@ export default function HomePage() {
     } finally {
       setAnalyzingId(null);
     }
-  }, [copy.quotaConfirm, refreshKeywordWorkspace, refreshSettings, refreshUsageSummary, settings?.scanGoal, showHealth]);
+  }, [copy.quotaConfirm, refreshKeywordWorkspace, refreshSettings, settings?.scanGoal, showHealth]);
 
   const runOpportunityScan = useCallback(async () => {
     const api = window.desktopAPI;
@@ -204,7 +240,6 @@ export default function HomePage() {
       setScanSummary({ newPosts: result.newPosts, seenPosts: result.seenPosts });
       setAnalysis((current) => ({ ...current, ...Object.fromEntries(result.analyses.map((item) => [item.postId, item])) }));
       await refreshKeywordWorkspace();
-      await refreshUsageSummary();
       if (result.posts[0]) setSelectedId(result.posts[0].id);
       showHealth({ ok: true, message: `${copy.scanComplete} ${result.newPosts} bài mới · ${result.seenPosts} bài đã thấy · ${result.analyzedPosts} AI brief · dọn ${result.prunedPosts} bài cũ.` });
       if (result.errors.length) setError(result.errors.join('\n'));
@@ -213,13 +248,13 @@ export default function HomePage() {
     } finally {
       setIsScanning(false);
     }
-  }, [activeKeywords.length, copy.quotaConfirm, copy.scanComplete, isScanning, refreshKeywordWorkspace, refreshUsageSummary, settings?.scanGoal, showHealth]);
+  }, [activeKeywords.length, copy.quotaConfirm, copy.scanComplete, isScanning, refreshKeywordWorkspace, settings?.scanGoal, showHealth]);
 
   useEffect(() => {
     const api = window.desktopAPI;
     if (!api) return;
 
-    Promise.all([api.getPosts(), api.getAnalyses(), api.getKeywords(), api.getKeywordExclusions(), api.getKeywordInsights(), api.getSavedPosts(), api.getAssets(), api.getUploadLogs(), api.getProducts()]).then(([storedPosts, storedAnalyses, storedKeywords, storedExclusions, storedInsights, storedSaved, storedAssets, storedUploadLogs, storedProducts]) => {
+    Promise.all([api.getPosts(), api.getAnalyses(), api.getKeywords(), api.getKeywordExclusions(), api.getKeywordInsights(), api.getSavedPosts(), api.getAssets(), api.getProducts(), api.getGeneratedVideos()]).then(([storedPosts, storedAnalyses, storedKeywords, storedExclusions, storedInsights, storedSaved, storedAssets, storedProducts, storedGeneratedVideos]) => {
       if (storedPosts.length) {
         setPosts(storedPosts);
         setSelectedId(storedPosts[0].id);
@@ -230,17 +265,23 @@ export default function HomePage() {
       setKeywordInsights(storedInsights);
       setSavedPosts(storedSaved);
       setAssets(storedAssets);
-      setUploadLogs(storedUploadLogs);
       setProducts(storedProducts);
+      setGeneratedVideos(storedGeneratedVideos);
     });
     api.getSettings().then(setSettings);
-    api.getUsageSummary().then(setUsageSummary);
+    api.getNormalizationStatus().then(setNormalizationBackendStatus);
   }, []);
 
   useEffect(() => {
     const api = window.desktopAPI;
-    if (!api || !['assets', 'reviews'].includes(activeView)) return;
+    if (!api || activeView !== 'assets') return;
     void api.getGeneratedVideos().then(setGeneratedVideos);
+  }, [activeView]);
+
+  useEffect(() => {
+    const api = window.desktopAPI;
+    if (!api || activeView !== 'opportunities') return;
+    void api.getUploadLogs().then(setUploadLogs);
   }, [activeView]);
 
   useEffect(() => {
@@ -265,6 +306,14 @@ export default function HomePage() {
     const api = window.desktopAPI;
     if (!api) return;
     return api.onCreateFromLinkProgress(setCreateLinkProgress);
+  }, []);
+
+  useEffect(() => {
+    const api = window.desktopAPI;
+    if (!api) return;
+    return api.onCreateBatchFromLinksProgress((progress) => {
+      setBatchProgress((current) => ({ ...current, [progress.index]: progress }));
+    });
   }, []);
 
   useEffect(() => {
@@ -368,11 +417,40 @@ export default function HomePage() {
     setBriefPostId(postId);
   }
 
-  function closeVideoBrief() {
+  function dismissVideoBrief() {
     activeVideoRenderSessionId.current = null;
     setVideoRenderSession(null);
     setBriefPostId(null);
     setBriefInitialBackground(undefined);
+  }
+
+  function closeVideoBrief(request?: VideoDraftRequest) {
+    if (request && isReadyBatchPost(request.post.id)) {
+      setBatchDrafts((current) => {
+        const saved = current[request.post.id];
+        const unchanged = Boolean(saved && JSON.stringify(saved.request) === JSON.stringify(request));
+        return {
+          ...current,
+          [request.post.id]: {
+            request,
+            reviewed: Boolean(saved?.reviewed && unchanged)
+          }
+        };
+      });
+    }
+    dismissVideoBrief();
+  }
+
+  function reviewBatchDraft(request: VideoDraftRequest) {
+    setBatchDrafts((current) => ({
+      ...current,
+      [request.post.id]: { request, reviewed: true }
+    }));
+    dismissVideoBrief();
+  }
+
+  function isReadyBatchPost(postId: string) {
+    return Boolean(batchResult?.items.some((item) => item.status === 'ready' && item.post?.id === postId));
   }
 
   async function importPostFromLink() {
@@ -435,7 +513,6 @@ export default function HomePage() {
       setSelectedId(result.post.id);
       setCreateLinkUrl('');
       openVideoBrief(result.post.id, result.backgroundPath);
-      await refreshUsageSummary();
       showHealth({ ok: true, message: copy.createFromLinkReady });
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
@@ -445,16 +522,137 @@ export default function HomePage() {
     }
   }
 
-  async function handleRenderVideoDraft(overrides?: Partial<VideoDraftRequest>) {
-    if (!briefPost || !briefAnalysis) return;
+  async function createBatchFromLinks(urls: string[]) {
+    if (!urls.length || isCreatingBatch) return;
     const api = window.desktopAPI;
     if (!api) {
       setError('Desktop API is unavailable. Run this inside Electron.');
       return;
     }
 
-    const renderPost = briefPost;
-    const renderAnalysis = briefAnalysis;
+    setIsCreatingBatch(true);
+    setBatchProgress({});
+    setBatchResult(null);
+    setBatchDrafts({});
+    setBatchRenderState({ running: false, completed: 0, total: 0, failedPostIds: [] });
+    setError(null);
+    showHealth(null);
+    try {
+      const result = await api.createBatchFromLinks({
+        urls,
+        minCommentLikes: 20,
+        minQualifiedComments: 3
+      });
+      const resultPosts = result.items.flatMap((item) => item.post ? [item.post] : []);
+      setPosts(mergePosts(resultPosts, await api.getPosts()));
+      setAnalysis((current) => ({
+        ...current,
+        ...Object.fromEntries(result.items.flatMap((item) => item.analysis ? [[item.analysis.postId, item.analysis]] : []))
+      }));
+      setBatchResult(result);
+      showHealth({
+        ok: result.readyCount > 0,
+        message: `Batch hoàn tất: ${result.readyCount} sẵn sàng · ${result.rejectedCount} bị loại · ${result.failedCount} lỗi.`
+      });
+      if (normalizationBackendStatus?.ok && result.readyCount > 0) {
+        await normalizeBatchItems(result.items);
+      }
+    } catch (batchError) {
+      setError(batchError instanceof Error ? batchError.message : String(batchError));
+    } finally {
+      setIsCreatingBatch(false);
+    }
+  }
+
+  async function normalizeBatchItems(items: BatchCreateFromLinksItem[]) {
+    const api = window.desktopAPI;
+    const readyItems = items.filter((item) => item.status === 'ready' && item.post);
+    if (!api || !readyItems.length || isNormalizingBatch) return;
+    if (!normalizationBackendStatus?.ok) {
+      showHealth({ ok: false, message: 'Đăng nhập ChatGPT bằng Codex hoặc thêm OpenAI API key dự phòng trong Cài đặt.' });
+      return;
+    }
+
+    setIsNormalizingBatch(true);
+    setSpeechNormalizations((current) => ({
+      ...current,
+      ...Object.fromEntries(readyItems.map((item) => [
+        item.post!.id,
+        current[item.post!.id]?.status === 'ready'
+          ? current[item.post!.id]
+          : { status: 'queued' as const }
+      ]))
+    }));
+
+    let cursor = 0;
+    let completed = 0;
+    let failed = 0;
+    const workerCount = Math.min(3, readyItems.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (cursor < readyItems.length) {
+        const item = readyItems[cursor++];
+        const post = item.post!;
+        if (speechNormalizations[post.id]?.status === 'ready') {
+          completed += 1;
+          continue;
+        }
+        setSpeechNormalizations((current) => ({
+          ...current,
+          [post.id]: { status: 'normalizing' }
+        }));
+        try {
+          const result = await api.normalizeSpeech({
+            relatedPostId: post.id,
+            segments: buildInitialSpeechSegments(post)
+          });
+          completed += 1;
+          setSpeechNormalizations((current) => ({
+            ...current,
+            [post.id]: { status: 'ready', result }
+          }));
+        } catch (normalizationError) {
+          failed += 1;
+          setSpeechNormalizations((current) => ({
+            ...current,
+            [post.id]: {
+              status: 'failed',
+              error: normalizationError instanceof Error ? normalizationError.message : String(normalizationError)
+            }
+          }));
+        }
+      }
+    });
+
+    await Promise.all(workers);
+    setIsNormalizingBatch(false);
+    showHealth({
+      ok: completed > 0,
+      message: 'Chuẩn hóa hoàn tất: ' + completed + ' bài sẵn sàng' + (failed ? ' · ' + failed + ' bài lỗi.' : '.')
+    });
+  }
+
+  function openBatchBrief(item: BatchCreateFromLinksItem) {
+    if (item.status !== 'ready' || !item.post || !item.analysis) return;
+    setPosts((current) => mergePosts([item.post!], current));
+    setAnalysis((current) => ({ ...current, [item.post!.id]: item.analysis! }));
+    setSelectedId(item.post.id);
+    openVideoBrief(item.post.id, item.backgroundPath);
+  }
+
+  function resetBatchWorkspace() {
+    setBatchInput('');
+    setBatchProgress({});
+    setBatchResult(null);
+    setSpeechNormalizations({});
+    setBatchDrafts({});
+    setBatchRenderState({ running: false, completed: 0, total: 0, failedPostIds: [] });
+  }
+
+  async function renderVideoRequest(request: VideoDraftRequest, notify = true): Promise<VideoDraftResult> {
+    const api = window.desktopAPI;
+    if (!api) throw new Error('Desktop API is unavailable. Run this inside Electron.');
+
+    const renderPost = request.post;
     const renderSessionId = `${renderPost.id}:${++videoRenderSequence.current}`;
     activeVideoRenderSessionId.current = renderSessionId;
     setVideoRenderSession({
@@ -466,25 +664,108 @@ export default function HomePage() {
     });
     setError(null);
     try {
-      const result = await api.renderVideoDraft({ post: renderPost, analysis: renderAnalysis, ...overrides, renderSessionId });
+      const result = await api.renderVideoDraft({ ...request, renderSessionId });
+      if (!result.ok || !result.filePath) throw new Error(result.message || 'Không tạo được video.');
       setVideoRenderSession((current) => current?.renderSessionId === renderSessionId
         ? { ...current, renderedVideoPath: result.filePath ?? null }
         : current);
       setGeneratedVideos(await api.getGeneratedVideos());
-      if (activeVideoRenderSessionId.current === renderSessionId) {
+      if (notify && activeVideoRenderSessionId.current === renderSessionId) {
         showHealth({ ok: result.ok, message: result.ok ? copy.videoDraftReady : result.message });
       }
+      return result;
     } catch (renderError) {
-      if (activeVideoRenderSessionId.current === renderSessionId) {
+      if (notify && activeVideoRenderSessionId.current === renderSessionId) {
         setError(renderError instanceof Error ? renderError.message : String(renderError));
       }
+      throw renderError;
     } finally {
-      await refreshSettings();
-      await refreshUsageSummary();
       if (activeVideoRenderSessionId.current === renderSessionId) activeVideoRenderSessionId.current = null;
       setVideoRenderSession((current) => current?.renderSessionId === renderSessionId
         ? { ...current, rendering: false }
         : current);
+    }
+  }
+
+  async function handleRenderVideoDraft(request: VideoDraftRequest) {
+    try {
+      const result = await renderVideoRequest(request);
+      if (result.filePath) {
+        const sendToLocalSend = window.desktopAPI?.sendGeneratedVideosToLocalSend;
+        const localSend = typeof sendToLocalSend === 'function'
+          ? await sendToLocalSend([result.filePath])
+          : { ok: false, message: 'Hãy đóng hoàn toàn Electron rồi mở lại để nạp tích hợp LocalSend mới.' };
+        if (!localSend.ok) showHealth(localSend);
+      }
+    } catch {
+      // renderVideoRequest already reports the actionable error for a single draft.
+    } finally {
+      await refreshSettings();
+    }
+  }
+
+  async function renderReviewedBatch() {
+    const api = window.desktopAPI;
+    if (!api || !batchResult || batchRenderState.running) return;
+
+    const readyItems = batchResult.items.filter((item) => item.status === 'ready' && item.post && item.analysis);
+    const pendingItems = readyItems.filter((item) => !generatedVideoByPostId.has(item.post!.id));
+    const unreviewedItems = pendingItems.filter((item) => !batchDrafts[item.post!.id]?.reviewed);
+    if (unreviewedItems.length) {
+      showHealth({
+        ok: false,
+        message: `Còn ${unreviewedItems.length} brief chưa được duyệt nội dung.`
+      });
+      return;
+    }
+    if (!pendingItems.length) {
+      showHealth({ ok: true, message: 'Tất cả video trong batch này đã được tạo.' });
+      return;
+    }
+
+    setError(null);
+    showHealth(null);
+    setBatchRenderState({ running: true, completed: 0, total: pendingItems.length, failedPostIds: [] });
+    const outputPaths: string[] = [];
+    const failedPostIds: string[] = [];
+
+    for (let index = 0; index < pendingItems.length; index += 1) {
+      const item = pendingItems[index];
+      const postId = item.post!.id;
+      setBatchRenderState((current) => ({ ...current, currentPostId: postId }));
+      try {
+        const result = await renderVideoRequest(batchDrafts[postId].request, false);
+        if (result.filePath) outputPaths.push(result.filePath);
+      } catch {
+        failedPostIds.push(postId);
+      } finally {
+        setBatchRenderState((current) => ({
+          ...current,
+          completed: index + 1,
+          failedPostIds: [...failedPostIds]
+        }));
+      }
+    }
+
+    setBatchRenderState((current) => ({ ...current, running: false, currentPostId: undefined }));
+    await refreshSettings();
+
+    const sendToLocalSend = api.sendGeneratedVideosToLocalSend;
+    const localSend = outputPaths.length
+      ? typeof sendToLocalSend === 'function'
+        ? await sendToLocalSend(outputPaths)
+        : { ok: false, message: 'Hãy đóng hoàn toàn Electron rồi mở lại để nạp tích hợp LocalSend mới.' }
+      : null;
+    if (failedPostIds.length) {
+      showHealth({
+        ok: false,
+        message: `Đã tạo ${outputPaths.length}/${pendingItems.length} video · ${failedPostIds.length} video lỗi.${localSend?.ok ? ' Các video thành công đã được đưa vào LocalSend.' : ''}`
+      });
+    } else {
+      showHealth(localSend ?? {
+        ok: true,
+        message: `Đã tạo xong ${outputPaths.length} video.`
+      });
     }
   }
 
@@ -693,85 +974,26 @@ export default function HomePage() {
 
           {activeView === 'home' ? (
             <CreateVideoHome
-              copy={copy}
-              createLinkProgress={createLinkProgress}
-              createLinkUrl={createLinkUrl}
-              creativeAiEnabled={settings?.creativeAiEnabled ?? false}
-              isCreatingFromLink={isCreatingFromLink}
+              batchInput={batchInput}
+              batchProgress={batchProgress}
+              batchResult={batchResult}
+              isCreatingBatch={isCreatingBatch}
+              isNormalizingBatch={isNormalizingBatch}
               language={language}
+              normalizationReady={Boolean(normalizationBackendStatus?.ok)}
+              normalizations={speechNormalizations}
+              reviewedDrafts={batchDrafts}
+              generatedVideos={generatedVideos}
+              batchRenderState={batchRenderState}
               threadsReady={Boolean(settings?.threadsSessionExists)}
-              onCreateFromLink={createFromLink}
-              onCreateLinkUrl={setCreateLinkUrl}
+              onBatchInput={setBatchInput}
+              onCreateBatch={(urls) => void createBatchFromLinks(urls)}
               onNavigateSettings={() => changeView('settings')}
-            />
-          ) : activeView === 'reviews' ? (
-            <VideoReviewQueue
-              language={language}
-              posts={posts}
-              videos={generatedVideos}
-              onApprove={async (filePath, approved) => {
-                const updated = await window.desktopAPI?.setGeneratedVideoApproved(filePath, approved);
-                if (updated) setGeneratedVideos(updated);
-              }}
-              onOpenDraft={handleGenerateTikTokIdea}
-              onOpenLink={openPostLink}
-              onOpenVideo={(filePath) => void window.desktopAPI?.openGeneratedVideo(filePath)}
-              onMarkManual={async (filePath, request) => {
-                const video = generatedVideos.find((item) => item.filePath === filePath);
-                const post = video ? posts.find((item) => item.id === video.postId) : undefined;
-                if (!post) {
-                  showHealth({ ok: false, message: 'Không tìm thấy post gốc để ghi Upload log.' });
-                  return;
-                }
-                const markPublished = window.desktopAPI?.markGeneratedVideoPublished;
-                if (typeof markPublished !== 'function') {
-                  showHealth({
-                    ok: false,
-                    message: 'Electron đang dùng preload cũ. Hãy đóng hoàn toàn ứng dụng rồi mở lại để dùng chức năng Đã đăng thủ công.'
-                  });
-                  return;
-                }
-                const result = await markPublished(filePath, request);
-                if (!result) return;
-                setGeneratedVideos(result.videos);
-                await window.desktopAPI?.saveUploadLog({
-                  id: crypto.randomUUID(),
-                  postId: post.id,
-                  tiktokUrl: request.publishedUrl,
-                  productName: '',
-                  hook: (request.caption || post.content).slice(0, 160),
-                  contentFormat: 'threads-story',
-                  uploadedAt: request.uploadedAt,
-                  views: 0,
-                  likes: 0,
-                  clicks: 0,
-                  orders: 0,
-                  revenue: 0,
-                  commission: 0,
-                  status: 'published',
-                  note: request.publishMethod === 'mobile'
-                    ? 'Đăng thủ công bằng ứng dụng TikTok trên điện thoại.'
-                    : 'Đăng thủ công bằng TikTok Studio trong trình duyệt thường.',
-                  contentGoal: analysis[post.id]?.contentGoal ?? 'engagement',
-                  followersGained: 0,
-                  comments: 0,
-                  saves: 0,
-                  shares: 0,
-                  variantLabel: ''
-                });
-                setUploadLogs(await window.desktopAPI!.getUploadLogs());
-                showHealth({ ok: true, message: 'Đã chuyển video sang Đã đăng và ghi Upload log.' });
-              }}
-              onPrepareUpload={async (filePath, caption) => {
-                const prepareUpload = window.desktopAPI?.prepareTikTokUpload;
-                if (typeof prepareUpload !== 'function') {
-                  showHealth({ ok: false, message: 'Hãy đóng hoàn toàn Electron rồi mở lại để nạp quy trình đăng TikTok Studio mới.' });
-                  return;
-                }
-                const result = await prepareUpload(filePath, caption);
-                setGeneratedVideos(result.videos);
-                showHealth({ ok: result.ok, message: result.message });
-              }}
+              onNormalizeBatch={() => batchResult ? void normalizeBatchItems(batchResult.items) : undefined}
+              onOpenBrief={openBatchBrief}
+              onOpenGenerated={(filePath) => void window.desktopAPI?.openGeneratedVideo(filePath)}
+              onRenderReviewed={() => void renderReviewedBatch()}
+              onResetBatch={resetBatchWorkspace}
             />
           ) : activeView === 'opportunities' ? (
             <OpportunityInbox
@@ -827,11 +1049,13 @@ export default function HomePage() {
           ) : activeView === 'settings' ? (
             <SettingsView
               settings={settings}
+              normalizationStatus={normalizationBackendStatus}
               copy={copy}
               assetCount={assets.filter((asset) => asset.type === 'background').length}
               onSave={saveSettings}
               onLoginThreads={loginThreads}
               onCheckThreads={checkThreadsSession}
+              onRefreshNormalizationStatus={refreshNormalizationBackendStatus}
             />
           ) : activeView === 'products' ? (
             <ProductsView
@@ -851,7 +1075,7 @@ export default function HomePage() {
             <AssetLibraryView
               assets={assets}
               generatedVideos={generatedVideos}
-              showProductClips={featureVisibility.affiliateWorkspace}
+              showProductClips={false}
               onAdd={addAsset}
               onDelete={deleteAsset}
               onDeleteGenerated={async (filePath) => {
@@ -860,31 +1084,6 @@ export default function HomePage() {
               }}
               onOpenGenerated={(filePath) => window.desktopAPI?.openGeneratedVideo(filePath)}
               onPreview={(id) => window.desktopAPI?.openAssetPreview(id)}
-            />
-          ) : activeView === 'uploads' ? (
-            <ResultsView
-              analyses={Object.values(analysis)}
-              copy={copy}
-              logs={uploadLogs}
-              posts={posts}
-              products={products}
-              usage={usageSummary}
-              thresholds={settings?.readinessThresholds ?? { avgViews: 1000, engagementRatePct: 4, streakDays: 7, followersGained: 500 }}
-              onSaveThresholds={(next) => void saveSettings({ readinessThresholds: next })}
-              onDelete={async (id): Promise<void> => {
-                await window.desktopAPI?.deleteUploadLog(id);
-                if (window.desktopAPI) {
-                  setUploadLogs(await window.desktopAPI.getUploadLogs());
-                  await refreshKeywordWorkspace();
-                }
-              }}
-              onSave={async (entry): Promise<void> => {
-                await window.desktopAPI?.saveUploadLog(entry);
-                if (window.desktopAPI) {
-                  setUploadLogs(await window.desktopAPI.getUploadLogs());
-                  await refreshKeywordWorkspace();
-                }
-              }}
             />
           ) : (
             <FeedView
@@ -919,6 +1118,9 @@ export default function HomePage() {
           assets={assets}
           copy={copy}
           creativeAiEnabled={settings?.creativeAiEnabled ?? false}
+          contentReviewed={Boolean(batchDrafts[briefPost.id]?.reviewed)}
+          initialDraft={batchDrafts[briefPost.id]?.request}
+          initialSpeechSegments={speechNormalizations[briefPost.id]?.result?.segments}
           initialBackgroundPath={briefInitialBackground}
           matchedProduct={briefAnalysis.matchedProductId ? products.find((product) => product.id === briefAnalysis.matchedProductId) : undefined}
           post={briefPost}
@@ -926,9 +1128,9 @@ export default function HomePage() {
           ttsProvider={settings?.ttsProvider ?? 'openai'}
           ttsSpeed={settings?.defaultSpeed ?? 1.1}
           ttsVoice={settings?.defaultVoice ?? 'nova'}
-          renderProgress={briefVideoRenderSession?.progress}
+          renderProgress={briefRenderProgress}
           renderedVideoPath={briefRenderedVideoPath}
-          videoApproved={Boolean(generatedVideos.find((video) => video.filePath === briefRenderedVideoPath)?.reviewStatus === 'approved')}
+          videoApproved={Boolean(briefGeneratedVideo?.reviewStatus === 'approved')}
           renderingVideo={briefVideoRenderSession?.rendering ?? false}
           onClose={closeVideoBrief}
           onOpenLink={() => openPostLink(briefPost)}
@@ -937,6 +1139,13 @@ export default function HomePage() {
             if (!briefRenderedVideoPath) return;
             const updated = await window.desktopAPI?.setGeneratedVideoApproved(briefRenderedVideoPath, approved);
             if (updated) setGeneratedVideos(updated);
+          }}
+          onReviewDraft={isReadyBatchPost(briefPost.id) ? reviewBatchDraft : undefined}
+          onSpeechNormalized={(result: SpeechNormalizationResult) => {
+            setSpeechNormalizations((current) => ({
+              ...current,
+              [briefPost.id]: { status: 'ready', result }
+            }));
           }}
           onRenderVideo={handleRenderVideoDraft}
         />
@@ -976,7 +1185,7 @@ function FetchToolbar({
         <option value="hashtag">Hashtag</option>
         <option value="profile">Profile</option>
         <option value="home">Home</option>
-        <option value="trending">Trending</option>
+        <option value="trending">Threads</option>
       </select>
       <Button variant="primary" icon={<RefreshCcw className={cn('size-4', isFetching && 'animate-spin')} />} disabled={isFetching} onClick={onFetch}>
         {copy.fetch}
@@ -1065,8 +1274,8 @@ function FeedView({
       </div>
       <div className="mb-4 flex flex-wrap gap-2">
         <FilterToggle active={repliesOnly} label="Replies ≥ 10" onClick={() => setRepliesOnly(!repliesOnly)} />
-        <FilterToggle active={growingOnly} label="Trend: Emerging / Growing" onClick={() => setGrowingOnly(!growingOnly)} />
-        <FilterToggle active={videoPotentialOnly} label="Video Potential ≥ 70" onClick={() => setVideoPotentialOnly(!videoPotentialOnly)} />
+        <FilterToggle active={growingOnly} label="Đà tương tác đang tăng" onClick={() => setGrowingOnly(!growingOnly)} />
+        <FilterToggle active={videoPotentialOnly} label="Tiềm năng làm video ≥ 70" onClick={() => setVideoPotentialOnly(!videoPotentialOnly)} />
       </div>
 
       <div className="space-y-4">
@@ -1099,18 +1308,22 @@ function FilterToggle({ active, label, onClick }: { active: boolean; label: stri
 
 function SettingsView({
   settings,
+  normalizationStatus,
   copy,
   assetCount,
   onSave,
   onLoginThreads,
-  onCheckThreads
+  onCheckThreads,
+  onRefreshNormalizationStatus
 }: {
   settings: AppSettings | null;
+  normalizationStatus: NormalizationBackendStatus | null;
   copy: TranslationCopy;
   assetCount: number;
   onSave: (settings: UpdateSettingsRequest) => Promise<AppSettings | null>;
   onLoginThreads: () => void;
   onCheckThreads: () => void;
+  onRefreshNormalizationStatus: () => Promise<NormalizationBackendStatus | null>;
 }) {
   const [silenceDraft, setSilenceDraft] = useState(400);
   const [voiceDraft, setVoiceDraft] = useState<TtsVoice>(
@@ -1122,6 +1335,9 @@ function SettingsView({
   const [previewText, setPreviewText] = useState('Some stories only need a slower pace to keep people listening until the end.');
   const [previewingVoice, setPreviewingVoice] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<string | null>(null);
+  const [openAiKeyDraft, setOpenAiKeyDraft] = useState('');
+  const [normalizationSetupStatus, setNormalizationSetupStatus] = useState<ServiceHealth | null>(null);
+  const [savingNormalizationSetup, setSavingNormalizationSetup] = useState(false);
   const [localTtsStatus, setLocalTtsStatus] = useState<LocalTtsStatus | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const pendingLocalSettingsRef = useRef<{ defaultVoice?: TtsVoice; defaultSpeed?: number; segmentSilenceMs?: number }>({});
@@ -1216,6 +1432,77 @@ function SettingsView({
     }
   }
 
+  async function saveNormalizationSetup() {
+    const api = window.desktopAPI;
+    if (!api || savingNormalizationSetup) return;
+    if (!openAiKeyDraft.trim() && !settings?.openAiApiKeySet) {
+      setNormalizationSetupStatus({ ok: false, message: vi ? 'Hãy nhập OpenAI API key.' : 'Enter an OpenAI API key.' });
+      return;
+    }
+
+    setSavingNormalizationSetup(true);
+    setNormalizationSetupStatus(null);
+    try {
+      if (openAiKeyDraft.trim()) {
+        const saved = await onSave({
+          openAiApiKey: openAiKeyDraft,
+          openAiModel: 'gpt-4o-mini'
+        });
+        if (!saved?.openAiApiKeySet) throw new Error(vi ? 'Không lưu được API key.' : 'Unable to save the API key.');
+        setOpenAiKeyDraft('');
+      }
+      const result = await api.testOpenAI();
+      setNormalizationSetupStatus(result);
+      await onRefreshNormalizationStatus();
+    } catch (setupError) {
+      setNormalizationSetupStatus({
+        ok: false,
+        message: setupError instanceof Error ? setupError.message : String(setupError)
+      });
+    } finally {
+      setSavingNormalizationSetup(false);
+    }
+  }
+
+  async function checkNormalizationStatus() {
+    if (savingNormalizationSetup) return;
+    setSavingNormalizationSetup(true);
+    setNormalizationSetupStatus(null);
+    try {
+      const status = await onRefreshNormalizationStatus();
+      if (status) setNormalizationSetupStatus({ ok: status.ok, message: status.message });
+    } catch (statusError) {
+      setNormalizationSetupStatus({ ok: false, message: statusError instanceof Error ? statusError.message : String(statusError) });
+    } finally {
+      setSavingNormalizationSetup(false);
+    }
+  }
+
+  async function loginCodex() {
+    const api = window.desktopAPI;
+    if (!api || savingNormalizationSetup) return;
+    setSavingNormalizationSetup(true);
+    setNormalizationSetupStatus(null);
+    try {
+      const started = await api.startCodexLogin();
+      setNormalizationSetupStatus(started);
+      if (!started.ok) return;
+      for (let attempt = 0; attempt < 45; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        const status = await onRefreshNormalizationStatus();
+        if (status?.codexLoggedIn) {
+          setNormalizationSetupStatus({ ok: true, message: vi ? 'Đã kết nối ChatGPT qua Codex.' : 'ChatGPT connected through Codex.' });
+          return;
+        }
+      }
+      setNormalizationSetupStatus({ ok: false, message: vi ? 'Chưa thấy phiên đăng nhập mới. Hoàn tất trong trình duyệt rồi bấm Kiểm tra lại.' : 'Login not detected yet. Finish in the browser, then check again.' });
+    } catch (loginError) {
+      setNormalizationSetupStatus({ ok: false, message: loginError instanceof Error ? loginError.message : String(loginError) });
+    } finally {
+      setSavingNormalizationSetup(false);
+    }
+  }
+
   return (
     <div className="max-w-3xl space-y-4">
       <details className="rounded-lg border border-border bg-panel p-5">
@@ -1225,21 +1512,15 @@ function SettingsView({
             {vi ? 'Module mở rộng' : 'Optional modules'}
           </div>
           <div className="mt-1 text-sm text-muted">
-            {vi ? 'Các công cụ nghiên cứu được giữ lại nhưng tắt mặc định.' : 'Research tools remain available but are disabled by default.'}
+            {vi ? 'Các công cụ lấy nguồn Threads được giữ lại nhưng tắt mặc định.' : 'Threads source tools remain available but are disabled by default.'}
           </div>
         </summary>
         <div className="mt-4 divide-y divide-border border-t border-border pt-2">
           <SettingsToggle
             checked={features.opportunityDiscovery}
-            label={vi ? 'Săn cơ hội & nghiên cứu' : 'Discovery & research'}
-            description={vi ? 'Inbox cơ hội, trending feed, keyword và bài đã lưu.' : 'Opportunity inbox, trending feed, keywords and saved posts.'}
+            label={vi ? 'Nguồn Threads nâng cao' : 'Advanced Threads sources'}
+            description={vi ? 'Quét từ khóa, lưu bài và quản lý nguồn nội dung Threads.' : 'Scan keywords, save posts, and manage Threads content sources.'}
             onChange={(checked) => onSave({ featureVisibility: { opportunityDiscovery: checked } })}
-          />
-          <SettingsToggle
-            checked={features.affiliateWorkspace}
-            label={vi ? 'Sản phẩm affiliate' : 'Affiliate products'}
-            description={vi ? 'Danh mục sản phẩm và ghép sản phẩm vào nội dung.' : 'Product catalog and product matching.'}
-            onChange={(checked) => onSave({ featureVisibility: { affiliateWorkspace: checked } })}
           />
         </div>
       </details>
@@ -1312,6 +1593,76 @@ function SettingsView({
           </button>
         </div>
       </div> : null}
+
+      <div className="rounded-lg border border-border bg-panel p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold text-text">{vi ? 'Chuẩn hóa nội dung tự động' : 'Automatic content normalization'}</div>
+            <div className="mt-1 text-sm text-muted">
+              {vi ? 'Ưu tiên tài khoản ChatGPT; API chỉ dùng dự phòng.' : 'Uses ChatGPT first; API is only the fallback.'}
+            </div>
+          </div>
+          <div className={cn('shrink-0 text-xs font-medium', normalizationStatus?.ok ? 'text-emerald-300' : 'text-amber-300')}>
+            {normalizationStatus?.activeProvider === 'codex'
+              ? 'ChatGPT'
+              : normalizationStatus?.activeProvider === 'openai'
+                ? 'OpenAI API'
+                : (vi ? 'Chưa cấu hình' : 'Not configured')}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-[#0f1217] px-3 py-3">
+          <div>
+            <div className="text-sm font-medium text-text">ChatGPT qua Codex</div>
+            <div className="mt-1 text-xs text-muted">
+              {normalizationStatus?.codexLoggedIn
+                ? (vi ? 'Đã đăng nhập · không dùng API key.' : 'Signed in · no API key used.')
+                : normalizationStatus?.codexInstalled
+                  ? (vi ? 'Đã cài Codex, cần đăng nhập.' : 'Codex installed; sign-in required.')
+                  : (vi ? 'Chưa tìm thấy Codex CLI.' : 'Codex CLI was not found.')}
+            </div>
+          </div>
+          <Button
+            variant="primary"
+            icon={savingNormalizationSetup ? <LoaderCircle className="size-4 animate-spin" /> : normalizationStatus?.codexLoggedIn ? <RefreshCcw className="size-4" /> : <LogIn className="size-4" />}
+            disabled={savingNormalizationSetup}
+            onClick={() => void (normalizationStatus?.codexLoggedIn ? checkNormalizationStatus() : loginCodex())}
+          >
+            {savingNormalizationSetup
+              ? (vi ? 'Đang kiểm tra...' : 'Checking...')
+              : normalizationStatus?.codexLoggedIn
+                ? (vi ? 'Kiểm tra lại' : 'Check again')
+                : (vi ? 'Đăng nhập ChatGPT' : 'Sign in to ChatGPT')}
+          </Button>
+        </div>
+        {normalizationSetupStatus ? (
+          <div className={cn('mt-2 text-xs', normalizationSetupStatus.ok ? 'text-emerald-300' : 'text-rose-300')}>
+            {normalizationSetupStatus.message}
+          </div>
+        ) : null}
+        <details className="mt-3 text-xs text-muted" open={!normalizationStatus?.codexLoggedIn && !settings?.openAiApiKeySet}>
+          <summary className="cursor-pointer select-none hover:text-text">{vi ? 'OpenAI API dự phòng' : 'OpenAI API fallback'}</summary>
+          <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_150px]">
+            <Input
+              type="password"
+              autoComplete="off"
+              value={openAiKeyDraft}
+              placeholder={settings?.maskedOpenAiApiKey ?? 'sk-...'}
+              onChange={(event) => setOpenAiKeyDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void saveNormalizationSetup();
+              }}
+            />
+            <Button
+              icon={savingNormalizationSetup ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+              disabled={savingNormalizationSetup}
+              onClick={() => void saveNormalizationSetup()}
+            >
+              {openAiKeyDraft.trim() ? (vi ? 'Lưu & kiểm tra' : 'Save & check') : (vi ? 'Kiểm tra API' : 'Check API')}
+            </Button>
+          </div>
+          <div className="mt-2">gpt-4o-mini · cache theo nội dung · tự dùng khi Codex không khả dụng.</div>
+        </details>
+      </div>
 
       <div className="rounded-lg border border-border bg-panel p-5">
         <div className="mb-5 flex items-center justify-between gap-3">
@@ -1609,6 +1960,17 @@ function quotaMessage(template: string, quota: QuotaBlockedResult) {
   return `${template} ($${quota.todayUsd.toFixed(2)} / $${quota.limitUsd.toFixed(2)})`;
 }
 
+function buildInitialSpeechSegments(post: ThreadsPost) {
+  const replies = filterUsefulReplies(post.topReplies, post).slice(0, 10);
+  return [
+    { id: 'post', text: post.content },
+    ...replies.map((reply, index) => ({
+      id: 'reply-' + (index + 1),
+      text: reply.content
+    }))
+  ];
+}
+
 function mergePosts(incoming: ThreadsPost[], current: ThreadsPost[]) {
   const map = new Map<string, ThreadsPost>();
   for (const post of [...current, ...incoming]) {
@@ -1623,8 +1985,6 @@ function titleForView(view: string, copy: TranslationCopy) {
       return copy.createFromLinkTitle;
     case 'opportunities':
       return copy.opportunityInbox;
-    case 'reviews':
-      return 'Duyệt video';
     case 'trending':
       return copy.trendingFeed;
     case 'keywords':
@@ -1635,8 +1995,6 @@ function titleForView(view: string, copy: TranslationCopy) {
       return copy.products;
     case 'assets':
       return 'Kho clip';
-    case 'uploads':
-      return 'Hiệu suất';
     case 'settings':
       return copy.settings;
     default:
@@ -1646,24 +2004,21 @@ function titleForView(view: string, copy: TranslationCopy) {
 
 function sectionLabelForView(view: string) {
   return {
-    home: 'Video workspace',
-    reviews: 'Publishing queue',
-    opportunities: 'Smart Inbox',
-    trending: 'Research',
+    home: 'Threads video workspace',
+    opportunities: 'Content suggestions',
+    trending: 'Threads sources',
     keywords: 'Sources',
     saved: 'Library',
     products: 'Catalog',
     assets: 'Assets',
-    uploads: 'Performance',
     settings: 'Settings'
-  }[view] ?? 'Trend Finder';
+  }[view] ?? 'Threads Video Studio';
 }
 
 function isViewEnabled(view: string, features: AppSettings['featureVisibility']) {
+  if (view === 'reviews' || view === 'uploads') return false;
   if (['opportunities', 'trending', 'keywords', 'saved'].includes(view)) return features.opportunityDiscovery;
-  if (view === 'products') return features.affiliateWorkspace;
+  if (view === 'products') return false;
   if (view === 'assets') return true;
-  if (view === 'reviews') return true;
-  if (view === 'uploads') return true;
   return true;
 }

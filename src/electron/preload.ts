@@ -17,6 +17,12 @@ const api: DesktopAPI = {
     ipcRenderer.on('workflow:create-from-link-progress', handler);
     return () => ipcRenderer.removeListener('workflow:create-from-link-progress', handler);
   },
+  createBatchFromLinks: (request) => ipcRenderer.invoke('workflow:create-batch-from-links', request),
+  onCreateBatchFromLinksProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof listener>[0]) => listener(progress);
+    ipcRenderer.on('workflow:create-batch-from-links-progress', handler);
+    return () => ipcRenderer.removeListener('workflow:create-batch-from-links-progress', handler);
+  },
   analyzePost: (post: ThreadsPost, goal, options) => ipcRenderer.invoke('ai:analyze-post', post, goal, options),
   getPosts: () => ipcRenderer.invoke('posts:list'),
   getAnalysis: (postId: string) => ipcRenderer.invoke('analysis:get', postId),
@@ -39,6 +45,9 @@ const api: DesktopAPI = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (settings) => ipcRenderer.invoke('settings:update', settings),
   testOpenAI: () => ipcRenderer.invoke('ai:test'),
+  getNormalizationStatus: () => ipcRenderer.invoke('ai:normalization-status'),
+  startCodexLogin: () => ipcRenderer.invoke('ai:codex-login'),
+  normalizeSpeech: (request) => ipcRenderer.invoke('ai:normalize-speech', request),
   testGemini: () => ipcRenderer.invoke('gemini:test'),
   getLocalTtsStatus: () => ipcRenderer.invoke('tts:local-status'),
   previewTts: (request) => ipcRenderer.invoke('tts:preview', request),
@@ -60,6 +69,7 @@ const api: DesktopAPI = {
   openAssetPreview: (id) => ipcRenderer.invoke('assets:open-preview', id),
   getGeneratedVideos: () => ipcRenderer.invoke('generated-videos:list'),
   openGeneratedVideo: (filePath) => ipcRenderer.invoke('generated-videos:open', filePath),
+  sendGeneratedVideosToLocalSend: (filePaths) => ipcRenderer.invoke('generated-videos:send-localsend', filePaths),
   deleteGeneratedVideo: (filePath) => ipcRenderer.invoke('generated-videos:delete', filePath),
   setGeneratedVideoApproved: (filePath, approved) => ipcRenderer.invoke('generated-videos:set-approved', filePath, approved),
   prepareTikTokUpload: (filePath, caption) => ipcRenderer.invoke('generated-videos:prepare-tiktok-upload', filePath, caption),

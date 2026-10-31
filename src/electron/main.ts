@@ -2,8 +2,11 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'ele
 import type { OpenDialogOptions } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { analyzeAffiliateOpportunity, testOpenAIConnection } from '@/server/ai/affiliateAnalysisService';
 import { discoverAffiliateKeywords } from '@/server/ai/keywordIntelligenceService';
+import { normalizeSpeechSegments } from '@/server/ai/speechNormalizationService';
+import { getCodexNormalizationStatus, startCodexLogin, stopCodexLogin } from '@/server/ai/codexNormalizationService';
 import {
   addKeywordExclusion,
   addKeyword,
@@ -42,7 +45,7 @@ import {
   updatePricing,
 } from '@/server/db/client';
 import { exportSavedIdeas } from '@/server/services/exportService';
-import { createVideoFromLink } from '@/server/services/createFromLinkService';
+import { createVideoFromLink, createVideosFromLinksBatch } from '@/server/services/createFromLinkService';
 import { fetchAndStoreThreads, importAndStoreThreadsPost, refreshPostReplies } from '@/server/services/fetchService';
 import { scanOpportunityInbox } from '@/server/services/opportunityScanService';
 import { getThreadsLoginStatus, openThreadsLoginSession } from '@/server/scraper/threadsScraper';
@@ -50,7 +53,7 @@ import { renderVideoDraft } from '@/server/video/videoDraftService';
 import { createTtsPreview, testGeminiConnection } from '@/server/video/ttsService';
 import { getVieneuLocalStatus, stopVieneuLocalService } from '@/server/video/vieneuLocalService';
 import { assertGeneratedVideoPath, deleteGeneratedVideo, deleteRegisteredAsset, listAssetsWithThumbnails, listGeneratedVideos, markGeneratedVideoPublished, registerAsset, setGeneratedVideoApproved, setGeneratedVideoPublishState } from '@/server/services/assetLibraryService';
-import type { AssetType, ContentGoal, FetchRequest, KeywordDiscoveryRequest, ManualPublishRequest, Product, QuotaBlockedResult, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
+import type { AssetType, BatchCreateFromLinksRequest, ContentGoal, FetchRequest, KeywordDiscoveryRequest, ManualPublishRequest, Product, QuotaBlockedResult, SpeechNormalizationRequest, ThreadsPost, TtsPreviewRequest, UpdateSettingsRequest, UploadLogEntry, VideoDraftProgress, VideoDraftRequest } from '@/lib/types';
 import { isTtsVoiceForProvider } from '@/lib/tts';
 import { normalizeTikTokCaption } from '@/lib/tiktokCaption';
 
@@ -106,6 +109,12 @@ function registerIpc() {
       if (blocked) return blocked;
     }
     return createVideoFromLink(url, (progress) => _event.sender.send('workflow:create-from-link-progress', progress));
+  });
+  ipcMain.handle('workflow:create-batch-from-links', async (_event, request: BatchCreateFromLinksRequest) => {
+    return createVideosFromLinksBatch(
+      request,
+      (progress) => _event.sender.send('workflow:create-batch-from-links-progress', progress)
+    );
   });
   ipcMain.handle('threads:login', async () => openThreadsLoginSession());
   ipcMain.handle('ai:analyze-post', async (_event, post: ThreadsPost, goal?: ContentGoal, options?: { confirmOverQuota?: boolean }) => {
@@ -175,6 +184,23 @@ function registerIpc() {
     return getAppSettings();
   });
   ipcMain.handle('ai:test', async () => testOpenAIConnection());
+  ipcMain.handle('ai:normalization-status', async () => {
+    const status = await getCodexNormalizationStatus(true);
+    const apiFallbackConfigured = Boolean(getOpenAiApiKey());
+    return {
+      ...status,
+      ok: status.codexLoggedIn || apiFallbackConfigured,
+      apiFallbackConfigured,
+      activeProvider: status.codexLoggedIn ? 'codex' : apiFallbackConfigured ? 'openai' : null,
+      message: status.codexLoggedIn
+        ? (apiFallbackConfigured ? 'ChatGPT sẵn sàng; OpenAI API là phương án dự phòng.' : 'ChatGPT sẵn sàng để chuẩn hóa.')
+        : apiFallbackConfigured
+          ? 'Codex chưa đăng nhập; đang dùng OpenAI API dự phòng.'
+          : status.message
+    };
+  });
+  ipcMain.handle('ai:codex-login', async () => startCodexLogin((url) => shell.openExternal(url)));
+  ipcMain.handle('ai:normalize-speech', async (_event, request: SpeechNormalizationRequest) => normalizeSpeechSegments(request));
   ipcMain.handle('gemini:test', async () => testGeminiConnection());
   ipcMain.handle('tts:local-status', async () => getVieneuLocalStatus());
   ipcMain.handle('tts:preview', async (_event, request: TtsPreviewRequest) => createTtsPreview({
@@ -216,7 +242,7 @@ function registerIpc() {
     sendProgress({ percent: 5, message: 'Chọn clip nền retention...' });
     const backgroundPath = request.backgroundPath || await pickVideoFile('Select an authorized retention background clip');
     if (!backgroundPath) return { ok: false, message: 'Video draft cancelled before selecting the background clip.' };
-    sendProgress({ percent: 12, message: 'Chuẩn bị clip demo sản phẩm nếu có...' });
+    sendProgress({ percent: 12, message: 'Chuẩn bị tài nguyên video...' });
     const matchedProduct = request.analysis.matchedProductId ? getProduct(request.analysis.matchedProductId) : null;
     let demoPath = request.productClipPath;
     if (demoPath === undefined && matchedProduct?.demoAssetId) {
@@ -252,6 +278,42 @@ function registerIpc() {
   ipcMain.handle('generated-videos:open', async (_event, filePath: string) => {
     shell.showItemInFolder(assertGeneratedVideoPath(filePath));
     return { ok: true, message: 'Opening export folder.' };
+  });
+  ipcMain.handle('generated-videos:send-localsend', async (_event, filePaths: string[]) => {
+    const resolvedPaths = [...new Set((Array.isArray(filePaths) ? filePaths : []).map(assertGeneratedVideoPath))];
+    if (!resolvedPaths.length) return { ok: false, message: 'Không có video hợp lệ để gửi sang LocalSend.' };
+
+    const executable = findLocalSendExecutable();
+    if (!executable) {
+      return {
+        ok: false,
+        message: 'Không tìm thấy LocalSend. Hãy cài LocalSend hoặc đặt đường dẫn trong biến LOCALSEND_PATH.'
+      };
+    }
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(executable, resolvedPaths, {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false
+        });
+        child.once('error', reject);
+        child.once('spawn', () => {
+          child.unref();
+          resolve();
+        });
+      });
+      return {
+        ok: true,
+        message: `Đã mở LocalSend và đính kèm ${resolvedPaths.length} video.`
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Không thể mở LocalSend: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
   });
   ipcMain.handle('generated-videos:delete', async (_event, filePath: string) => deleteGeneratedVideo(filePath));
   ipcMain.handle('generated-videos:set-approved', async (_event, filePath: string, approved: boolean) => setGeneratedVideoApproved(filePath, approved));
@@ -333,6 +395,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  stopCodexLogin();
   stopVieneuLocalService();
 });
 
@@ -355,6 +418,22 @@ function normalizeGeminiApiKey(value: unknown) {
 
   const assignment = trimmed.match(/GEMINI_API_KEY\s*=\s*["']?([^"'\s]+)["']?/i);
   return assignment?.[1]?.trim() || trimmed;
+}
+
+function findLocalSendExecutable() {
+  const candidates = [
+    process.env.LOCALSEND_PATH,
+    process.platform === 'win32' ? 'C:\\Program Files\\LocalSend\\localsend_app.exe' : undefined,
+    process.platform === 'win32' ? 'C:\\Program Files (x86)\\LocalSend\\localsend_app.exe' : undefined,
+    process.env.LOCALAPPDATA && process.platform === 'win32'
+      ? path.join(process.env.LOCALAPPDATA, 'Programs', 'LocalSend', 'localsend_app.exe')
+      : undefined,
+    process.platform === 'darwin' ? '/Applications/LocalSend.app/Contents/MacOS/localsend_app' : undefined,
+    process.platform === 'linux' ? '/usr/bin/localsend_app' : undefined,
+    process.platform === 'linux' ? '/usr/local/bin/localsend_app' : undefined
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
 async function pickVideoFile(title: string) {

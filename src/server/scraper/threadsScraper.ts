@@ -57,7 +57,6 @@ export async function fetchThreadsPosts(request: FetchRequest): Promise<ThreadsP
 export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPost> {
   const config = getConfig();
   const normalizedUrl = normalizeThreadsPostUrl(postUrl);
-  const postId = normalizedUrl.split('/post/')[1];
   fs.mkdirSync(path.dirname(config.threadsStorageState), { recursive: true });
   fs.mkdirSync(config.threadsProfileDir, { recursive: true });
 
@@ -65,7 +64,63 @@ export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPos
 
   try {
     await requireThreadsAuthentication(context, 'importing a Threads post');
-    const page = await context.newPage();
+    const post = await fetchThreadsPostByUrlInContext(context, normalizedUrl);
+    await context.storageState({ path: config.threadsStorageState });
+    return post;
+  } finally {
+    await context.close();
+  }
+}
+
+export type ThreadsBatchFetchItem =
+  | { url: string; post: ThreadsPost; status: 'success' }
+  | { url: string; error: string; status: 'failed' };
+
+export async function fetchThreadsPostsByUrls(
+  postUrls: string[],
+  onItem?: (item: ThreadsBatchFetchItem, index: number) => void,
+  onStart?: (url: string, index: number) => void
+): Promise<ThreadsBatchFetchItem[]> {
+  const config = getConfig();
+  const normalizedUrls = postUrls.map(normalizeThreadsPostUrl);
+  fs.mkdirSync(path.dirname(config.threadsStorageState), { recursive: true });
+  fs.mkdirSync(config.threadsProfileDir, { recursive: true });
+
+  const context = await createThreadsContext(true);
+  const results = new Array<ThreadsBatchFetchItem>(normalizedUrls.length);
+  let nextIndex = 0;
+
+  try {
+    await requireThreadsAuthentication(context, 'importing Threads posts');
+    const workerCount = Math.min(2, normalizedUrls.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextIndex < normalizedUrls.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const url = normalizedUrls[index];
+        onStart?.(url, index);
+        let item: ThreadsBatchFetchItem;
+        try {
+          item = { url, post: await fetchThreadsPostByUrlInContext(context, url), status: 'success' };
+        } catch (error) {
+          item = { url, error: error instanceof Error ? error.message : String(error), status: 'failed' };
+        }
+        results[index] = item;
+        onItem?.(item, index);
+      }
+    }));
+    await context.storageState({ path: config.threadsStorageState });
+    return results;
+  } finally {
+    await context.close();
+  }
+}
+
+async function fetchThreadsPostByUrlInContext(context: BrowserContext, normalizedUrl: string): Promise<ThreadsPost> {
+  const config = getConfig();
+  const postId = normalizedUrl.split('/post/')[1];
+  const page = await context.newPage();
+  try {
     await page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await acceptNonBlockingDialogs(page);
     if (await isLoginRequired(page)) throw loginRequiredError('importing a Threads post');
@@ -101,7 +156,6 @@ export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPos
       if (error instanceof ThreadsAccessError) throw error;
     }
     const topReplies = filterUsefulReplies(fetchedReplies, rawPost);
-    await context.storageState({ path: config.threadsStorageState });
     return scoreRawPost({
       ...rawPost,
       id: postId,
@@ -111,7 +165,7 @@ export async function fetchThreadsPostByUrl(postUrl: string): Promise<ThreadsPos
       keyword: undefined
     }, topReplies);
   } finally {
-    await context.close();
+    await page.close().catch(() => undefined);
   }
 }
 

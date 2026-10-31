@@ -319,6 +319,39 @@ export type ServiceHealth = {
   message: string;
 };
 
+export type NormalizationBackendStatus = ServiceHealth & {
+  codexInstalled: boolean;
+  codexLoggedIn: boolean;
+  codexVersion: string | null;
+  apiFallbackConfigured: boolean;
+  activeProvider: 'codex' | 'openai' | null;
+};
+
+export type SpeechNormalizationSegment = {
+  id: string;
+  text: string;
+};
+
+export type SpeechNormalizationRequest = {
+  segments: SpeechNormalizationSegment[];
+  relatedPostId?: string;
+};
+
+export type SpeechNormalizationResult = {
+  segments: SpeechNormalizationSegment[];
+  model: string;
+  provider: 'codex' | 'openai';
+  cached: boolean;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+export type SpeechNormalizationState = {
+  status: 'queued' | 'normalizing' | 'ready' | 'failed';
+  result?: SpeechNormalizationResult;
+  error?: string;
+};
+
 export type LocalTtsStatus = ServiceHealth & {
   installed: boolean;
   modelReady: boolean;
@@ -428,6 +461,44 @@ export type CreateFromLinkResult = {
   backgroundPath?: string;
 };
 
+export type BatchCreateFromLinksRequest = {
+  urls: string[];
+  minCommentLikes: number;
+  minQualifiedComments: number;
+};
+
+export type BatchCreateItemStatus = 'fetching' | 'ready' | 'rejected' | 'failed';
+
+export type BatchCreateFromLinksProgress = {
+  index: number;
+  url: string;
+  status: BatchCreateItemStatus;
+  current: number;
+  total: number;
+  percent: number;
+  message: string;
+  qualifiedCommentCount?: number;
+};
+
+export type BatchCreateFromLinksItem = {
+  url: string;
+  status: Exclude<BatchCreateItemStatus, 'fetching'>;
+  post?: ThreadsPost;
+  analysis?: AIAnalysis;
+  backgroundPath?: string;
+  qualifiedCommentCount: number;
+  fetchedCommentCount: number;
+  maxCommentLikes: number;
+  reason?: string;
+};
+
+export type BatchCreateFromLinksResult = {
+  items: BatchCreateFromLinksItem[];
+  readyCount: number;
+  rejectedCount: number;
+  failedCount: number;
+};
+
 export type Product = {
   id: string;
   name: string;
@@ -522,7 +593,7 @@ export type ReadinessThresholds = {
   followersGained: number;
 };
 
-export type ApiUsageKind = 'analysis' | 'keyword_discovery' | 'tts' | 'transcription';
+export type ApiUsageKind = 'analysis' | 'keyword_discovery' | 'normalization' | 'tts' | 'transcription';
 
 export type UsageSummary = {
   todayUsd: number;
@@ -546,6 +617,8 @@ export type DesktopAPI = {
   onOpportunityScanProgress: (listener: (progress: OpportunityScanProgress) => void) => () => void;
   createFromLink: (url: string, options?: { confirmOverQuota?: boolean }) => Promise<CreateFromLinkResult | QuotaBlockedResult>;
   onCreateFromLinkProgress: (listener: (progress: CreateFromLinkProgress) => void) => () => void;
+  createBatchFromLinks: (request: BatchCreateFromLinksRequest) => Promise<BatchCreateFromLinksResult>;
+  onCreateBatchFromLinksProgress: (listener: (progress: BatchCreateFromLinksProgress) => void) => () => void;
   analyzePost: (post: ThreadsPost, goal?: ContentGoal, options?: { confirmOverQuota?: boolean }) => Promise<AIAnalysis | QuotaBlockedResult>;
   getPosts: () => Promise<ThreadsPost[]>;
   getAnalysis: (postId: string) => Promise<AIAnalysis | null>;
@@ -568,6 +641,9 @@ export type DesktopAPI = {
   getSettings: () => Promise<AppSettings>;
   updateSettings: (settings: UpdateSettingsRequest) => Promise<AppSettings>;
   testOpenAI: () => Promise<ServiceHealth>;
+  getNormalizationStatus: () => Promise<NormalizationBackendStatus>;
+  startCodexLogin: () => Promise<ServiceHealth>;
+  normalizeSpeech: (request: SpeechNormalizationRequest) => Promise<SpeechNormalizationResult>;
   testGemini: () => Promise<ServiceHealth>;
   getLocalTtsStatus: () => Promise<LocalTtsStatus>;
   previewTts: (request: TtsPreviewRequest) => Promise<TtsPreviewResult>;
@@ -585,6 +661,7 @@ export type DesktopAPI = {
   openAssetPreview: (id: string) => Promise<ServiceHealth>;
   getGeneratedVideos: () => Promise<GeneratedVideoItem[]>;
   openGeneratedVideo: (filePath: string) => Promise<ServiceHealth>;
+  sendGeneratedVideosToLocalSend: (filePaths: string[]) => Promise<ServiceHealth>;
   deleteGeneratedVideo: (filePath: string) => Promise<void>;
   setGeneratedVideoApproved: (filePath: string, approved: boolean) => Promise<GeneratedVideoItem[]>;
   prepareTikTokUpload: (filePath: string, caption: string) => Promise<TikTokUploadPreparationResult>;

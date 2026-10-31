@@ -248,7 +248,7 @@ export async function renderVideoDraft(request: RenderVideoDraftRequest, onProgr
     variantPaths.push(variantOutput);
   }
 
-  onProgress({ percent: 100, message: 'Đã tạo xong video affiliate.' });
+  onProgress({ percent: 100, message: 'Đã tạo xong video.' });
 
   return { ok: true, message: `Video rendered with ${voice} at ${speed.toFixed(2)}x.`, filePath: outputPath, variantPaths: variantPaths.length ? variantPaths : undefined };
 }

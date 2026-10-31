@@ -36,7 +36,7 @@ export function ResultsView({ logs, posts, onDelete, onSave }: {
     <div className="mx-auto w-full max-w-6xl space-y-5 pb-10">
       <section className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-text">Theo dõi video TikTok</h2>
+          <h2 className="text-lg font-semibold text-text">Hiệu suất video đã đăng</h2>
           <p className="mt-1 text-sm text-muted">Ghi nhận kết quả sau khi đăng để tìm ra khung giờ và kiểu nội dung phù hợp với chính tài khoản này.</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -104,7 +104,7 @@ function VideoRow({ log, post, onDelete, onEdit }: { log: UploadLogEntry; post?:
   return (
     <article className="flex flex-col gap-3 px-4 py-3 lg:grid lg:grid-cols-[minmax(0,1fr)_420px_194px] lg:items-center">
       <div className="min-w-0 flex-1">
-        <div className="line-clamp-1 text-sm font-medium text-text">{post?.content || log.hook || 'Video TikTok'}</div>
+        <div className="line-clamp-1 text-sm font-medium text-text">{post?.content || log.hook || 'Video đã đăng'}</div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
           <span className="inline-flex items-center gap-1"><Clock3 className="size-3" />{formatPublishedAt(log.uploadedAt)}</span>
           <span>{formatAge(log.uploadedAt)}</span>
@@ -131,7 +131,7 @@ function MetricsModal({ log, onClose, onSave }: { log: UploadLogEntry; onClose: 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-5" onMouseDown={onClose}>
       <section className="w-full max-w-lg rounded-lg border border-border bg-[#0c0f13] shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="flex items-center justify-between border-b border-border px-5 py-4"><div><div className="text-xs uppercase tracking-[0.14em] text-accent">TikTok Analytics</div><h2 className="mt-1 text-lg font-semibold text-text">Cập nhật số liệu</h2></div><Button className="px-2" icon={<X className="size-4" />} onClick={onClose} /></header>
+        <header className="flex items-center justify-between border-b border-border px-5 py-4"><div><div className="text-xs uppercase tracking-[0.14em] text-accent">Số liệu video</div><h2 className="mt-1 text-lg font-semibold text-text">Cập nhật số liệu</h2></div><Button className="px-2" icon={<X className="size-4" />} onClick={onClose} /></header>
         <div className="grid gap-3 p-5 sm:grid-cols-2">
           <NumberField label="Lượt xem" value={metric(draft.views)} onChange={(views) => setDraft({ ...draft, views })} />
           <NumberField label="Lượt thích" value={metric(draft.likes)} onChange={(likes) => setDraft({ ...draft, likes })} />

@@ -821,7 +821,8 @@ export function getOpenAiApiKey() {
 }
 
 export function getOpenAiModel() {
-  return getSetting('openai.model') || process.env.OPENAI_MODEL || recommendedOpenAIModel;
+  const configured = getSetting('openai.model') || process.env.OPENAI_MODEL || recommendedOpenAIModel;
+  return configured === 'gpt-4.1-nano' ? recommendedOpenAIModel : configured;
 }
 
 export function setGeminiApiKey(apiKey: string) {
@@ -1173,7 +1174,7 @@ function positiveNumber(value: unknown, fallback: number) {
 
 export function estimateCostUsd(kind: ApiUsageKind, model: string, inputUnits: number, outputUnits: number): number {
   const pricing = getPricing();
-  if (kind === 'analysis' || kind === 'keyword_discovery') {
+  if (kind === 'analysis' || kind === 'keyword_discovery' || kind === 'normalization') {
     const chat = pricing.chat[model] ?? fallbackChatPricing;
     return (inputUnits / 1_000_000) * chat.inPerM + (outputUnits / 1_000_000) * chat.outPerM;
   }
@@ -1221,6 +1222,7 @@ export function getUsageSummary(): UsageSummary {
   const perKind: UsageSummary['perKind'] = {
     analysis: { units: 0, usd: 0 },
     keyword_discovery: { units: 0, usd: 0 },
+    normalization: { units: 0, usd: 0 },
     tts: { units: 0, usd: 0 },
     transcription: { units: 0, usd: 0 }
   };

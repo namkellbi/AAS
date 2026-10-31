@@ -2,7 +2,7 @@
   "name": "threads-affiliate-trend-finder",
   "version": "0.1.0",
   "private": true,
-  "description": "Desktop research app for discovering trending Threads posts and generating affiliate videos.",
+  "description": "Desktop workflow for creating videos from Threads posts and replies.",
   "main": "dist/electron/main.js",
   "scripts": {
     "dev": "concurrently -k \"next dev -p 3000\" \"tsup src/electron/main.ts src/electron/preload.ts --format cjs --platform node --out-dir dist/electron --external electron --external better-sqlite3 --external playwright --external openai --watch\" \"wait-on tcp:3000 file:dist/electron/main.js && node scripts/launch-electron.cjs\"",

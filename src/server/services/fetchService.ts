@@ -45,6 +45,15 @@ export async function importAndStoreThreadsPost(postUrl: string) {
   }
 }
 
+export function storeImportedThreadsPosts(fetchedPosts: ThreadsPost[]) {
+  if (!fetchedPosts.length) return [];
+  const posts = scoreStoredPosts(enrichPostsWithVelocity(fetchedPosts));
+  upsertPosts(posts);
+  recordEngagementSnapshots(posts);
+  pruneUnusedResearchData();
+  return posts;
+}
+
 export async function refreshPostReplies(post: ThreadsPost) {
   const topReplies = filterUsefulReplies(await withRetry(() => scrapeThreadsPostReplies(post.url, post)), post);
   const next = { ...post, topReplies };

@@ -193,7 +193,7 @@ export function VideoReviewQueue({
             <div className="space-y-4 p-5">
               <div className="truncate rounded-md border border-border bg-panelSoft px-3 py-2 text-sm text-text">{manualTarget.filePath.split(/[\\/]/).pop()}</div>
               <label className="grid gap-2 text-xs text-muted">
-                {vi ? 'Link bài TikTok (không bắt buộc)' : 'TikTok post URL (optional)'}
+                {vi ? 'Link video đã đăng (không bắt buộc)' : 'Published video URL (optional)'}
                 <input className="h-10 rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:border-accent" placeholder="https://www.tiktok.com/@.../video/..." type="url" value={manualUrl} onChange={(event) => setManualUrl(event.target.value)} />
               </label>
               <label className="grid gap-2 text-xs text-muted">

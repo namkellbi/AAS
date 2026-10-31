@@ -9,19 +9,11 @@ export type OpenAIModelOption = {
   badge?: string;
 };
 
-export const recommendedOpenAIModel = 'gpt-4.1-nano';
+// gpt-4.1-nano was retired. Keep the default on a small Structured Outputs
+// capable model so existing installations do not keep calling a missing model.
+export const recommendedOpenAIModel = 'gpt-4o-mini';
 
 export const openAIModelOptions: OpenAIModelOption[] = [
-  {
-    id: 'gpt-4.1-nano',
-    label: 'GPT-4.1 nano',
-    description: 'Cheapest option for testing affiliate post analysis.',
-    inputUsdPerMillion: 0.1,
-    cachedInputUsdPerMillion: 0.025,
-    outputUsdPerMillion: 0.4,
-    recommendedFor: 'Initial testing, bulk scoring, low-cost drafts',
-    badge: 'Recommended cheapest'
-  },
   {
     id: 'gpt-4o-mini',
     label: 'GPT-4o mini',
@@ -29,7 +21,8 @@ export const openAIModelOptions: OpenAIModelOption[] = [
     inputUsdPerMillion: 0.15,
     cachedInputUsdPerMillion: 0.075,
     outputUsdPerMillion: 0.6,
-    recommendedFor: 'Balanced low-cost analysis'
+    recommendedFor: 'Balanced low-cost analysis and TTS text normalization',
+    badge: 'Recommended'
   },
   {
     id: 'gpt-4.1-mini',

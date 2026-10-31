@@ -2,19 +2,22 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { CheckCircle2, ClipboardCopy, ClipboardPaste, Clock3, ExternalLink, FolderOpen, Lightbulb, Move, Music, Play, RotateCcw, ShoppingBag, Target, Trash2, Video, VolumeX, X } from 'lucide-react';
+import { CheckCircle2, ClipboardCopy, ClipboardPaste, Clock3, ExternalLink, FolderOpen, Lightbulb, LoaderCircle, Move, Music, Play, RotateCcw, ShoppingBag, Sparkles, Target, Trash2, Video, VolumeX, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { TranslationCopy } from '@/lib/i18n';
 import { filterUsefulReplies } from '@/lib/replies';
-import type { AIAnalysis, AssetLibraryItem, Product, ThreadsPost, TtsProvider, TtsVoice, VideoDraftRequest, VideoDraftVariant } from '@/lib/types';
+import type { AIAnalysis, AssetLibraryItem, Product, SelectedReply, SpeechNormalizationResult, SpeechNormalizationSegment, ThreadsPost, TtsProvider, TtsVoice, VideoDraftRequest, VideoDraftVariant } from '@/lib/types';
 
 export function TikTokBriefModal({
   analysis,
   assets,
   copy,
   creativeAiEnabled,
+  contentReviewed,
+  initialDraft,
+  initialSpeechSegments,
   initialBackgroundPath,
   matchedProduct,
   post,
@@ -30,12 +33,17 @@ export function TikTokBriefModal({
   onOpenLink,
   onOpenOutputFolder,
   onSetApproved,
+  onReviewDraft,
+  onSpeechNormalized,
   onRenderVideo
 }: {
   analysis: AIAnalysis;
   assets: AssetLibraryItem[];
   copy: TranslationCopy;
   creativeAiEnabled: boolean;
+  contentReviewed?: boolean;
+  initialDraft?: VideoDraftRequest;
+  initialSpeechSegments?: SpeechNormalizationSegment[];
   initialBackgroundPath?: string;
   matchedProduct?: Product;
   post: ThreadsPost;
@@ -47,30 +55,34 @@ export function TikTokBriefModal({
   renderedVideoPath?: string | null;
   renderingVideo: boolean;
   videoApproved: boolean;
-  onClose: () => void;
+  onClose: (request: VideoDraftRequest) => void;
   onOpenLink: () => void;
   onOpenOutputFolder: () => void;
   onSetApproved: (approved: boolean) => void;
-  onRenderVideo: (request: Partial<VideoDraftRequest>) => void;
+  onReviewDraft?: (request: VideoDraftRequest) => void;
+  onSpeechNormalized?: (result: SpeechNormalizationResult) => void;
+  onRenderVideo: (request: VideoDraftRequest) => void;
 }) {
   const useOriginalPostReadOnly = !creativeAiEnabled;
   const displayedHooks = useOriginalPostReadOnly ? [] : analysis.hooks;
   const displayedCtas = useOriginalPostReadOnly ? [] : analysis.ctas;
-  const [replies, setReplies] = useState(topLikedReplies(post));
-  const [replyTtsTexts, setReplyTtsTexts] = useState<Record<string, string>>(() => buildReplyTtsTexts(topLikedReplies(post)));
-  const [hookText, setHookText] = useState(useOriginalPostReadOnly ? '' : analysis.hooks[0] || '');
-  const [postText, setPostText] = useState(useOriginalPostReadOnly ? post.content : analysis.videoScript.postReadVersion || post.content);
-  const [postTtsText, setPostTtsText] = useState(useOriginalPostReadOnly ? post.content : analysis.videoScript.postReadVersion || post.content);
-  const [transitionLine, setTransitionLine] = useState(useOriginalPostReadOnly ? '' : analysis.videoScript.transitionLine);
-  const [solutionText, setSolutionText] = useState(useOriginalPostReadOnly ? '' : analysis.videoScript.solutionText || analysis.solutionScript);
-  const [ctaText, setCtaText] = useState(useOriginalPostReadOnly ? '' : analysis.videoScript.ctaText || analysis.ctas[0] || '');
-  const [backgroundPath, setBackgroundPath] = useState(() => initialBackgroundPath ?? pickRandomBackgroundAsset(assets));
-  const [backgroundMusicEnabled, setBackgroundMusicEnabled] = useState(true);
+  const initialReplies = initialDraft?.selectedReplies?.length ? initialDraft.selectedReplies : topLikedReplies(post);
+  const defaultPostText = useOriginalPostReadOnly ? post.content : analysis.videoScript.postReadVersion || post.content;
+  const [replies, setReplies] = useState<SelectedReply[]>(initialReplies);
+  const [replyTtsTexts, setReplyTtsTexts] = useState<Record<string, string>>(() => buildReplyTtsTexts(initialReplies, initialDraft?.replyTtsTexts));
+  const [hookText, setHookText] = useState(initialDraft?.hookText ?? (useOriginalPostReadOnly ? '' : analysis.hooks[0] || ''));
+  const [postText, setPostText] = useState(initialDraft?.postReadVersion ?? defaultPostText);
+  const [postTtsText, setPostTtsText] = useState(initialDraft?.postTtsText ?? defaultPostText);
+  const [transitionLine, setTransitionLine] = useState(initialDraft?.transitionLine ?? (useOriginalPostReadOnly ? '' : analysis.videoScript.transitionLine));
+  const [solutionText, setSolutionText] = useState(initialDraft?.solutionText ?? (useOriginalPostReadOnly ? '' : analysis.videoScript.solutionText || analysis.solutionScript));
+  const [ctaText, setCtaText] = useState(initialDraft?.ctaText ?? (useOriginalPostReadOnly ? '' : analysis.videoScript.ctaText || analysis.ctas[0] || ''));
+  const [backgroundPath, setBackgroundPath] = useState(() => initialDraft?.backgroundPath ?? initialBackgroundPath ?? pickRandomBackgroundAsset(assets));
+  const [backgroundMusicEnabled, setBackgroundMusicEnabled] = useState(initialDraft?.backgroundMusicEnabled ?? true);
   const selectedBackgroundAsset = assets.find((asset) => asset.type === 'background' && asset.filePath === backgroundPath);
   const matchedDemoPath = matchedProduct?.demoAssetId ? assets.find((asset) => asset.id === matchedProduct.demoAssetId)?.filePath ?? '' : '';
-  const [productClipPath, setProductClipPath] = useState(matchedDemoPath);
-  const [variants, setVariants] = useState<VideoDraftVariant[]>([]);
-  const [deletedReply, setDeletedReply] = useState<{ reply: ReturnType<typeof topLikedReplies>[number]; index: number } | null>(null);
+  const [productClipPath, setProductClipPath] = useState(initialDraft?.productClipPath ?? matchedDemoPath);
+  const [variants, setVariants] = useState<VideoDraftVariant[]>(initialDraft?.variants ?? []);
+  const [deletedReply, setDeletedReply] = useState<{ reply: SelectedReply; index: number } | null>(null);
   const [draggedReplyIndex, setDraggedReplyIndex] = useState<number | null>(null);
   const [dragOverReplyIndex, setDragOverReplyIndex] = useState<number | null>(null);
   const scrollContainerRef = useRef<HTMLElement>(null);
@@ -78,34 +90,41 @@ export function TikTokBriefModal({
   const dragScrollFrameRef = useRef<number | null>(null);
   const [clipboardMessage, setClipboardMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [importBackup, setImportBackup] = useState<{ postText: string; replyTexts: Record<string, string> } | null>(null);
+  const [normalizingSpeech, setNormalizingSpeech] = useState(false);
+  const [speechTextsFinalized, setSpeechTextsFinalized] = useState(initialDraft?.speechTextsFinalized ?? Boolean(initialSpeechSegments?.length));
   useEffect(() => {
-    const nextReplies = topLikedReplies(post);
+    const nextReplies = initialDraft?.selectedReplies?.length ? initialDraft.selectedReplies : topLikedReplies(post);
     setReplies(nextReplies);
-    setReplyTtsTexts(buildReplyTtsTexts(nextReplies));
-    setHookText(useOriginalPostReadOnly ? '' : analysis.hooks[0] || '');
-    setPostText(useOriginalPostReadOnly ? post.content : analysis.videoScript.postReadVersion || post.content);
-    setPostTtsText(useOriginalPostReadOnly ? post.content : analysis.videoScript.postReadVersion || post.content);
-    setTransitionLine(useOriginalPostReadOnly ? '' : analysis.videoScript.transitionLine);
-    setSolutionText(useOriginalPostReadOnly ? '' : analysis.videoScript.solutionText || analysis.solutionScript);
-    setCtaText(useOriginalPostReadOnly ? '' : analysis.videoScript.ctaText || analysis.ctas[0] || '');
+    setReplyTtsTexts(buildReplyTtsTexts(nextReplies, initialDraft?.replyTtsTexts));
+    setHookText(initialDraft?.hookText ?? (useOriginalPostReadOnly ? '' : analysis.hooks[0] || ''));
+    setPostText(initialDraft?.postReadVersion ?? defaultPostText);
+    setPostTtsText(initialDraft?.postTtsText ?? defaultPostText);
+    setTransitionLine(initialDraft?.transitionLine ?? (useOriginalPostReadOnly ? '' : analysis.videoScript.transitionLine));
+    setSolutionText(initialDraft?.solutionText ?? (useOriginalPostReadOnly ? '' : analysis.videoScript.solutionText || analysis.solutionScript));
+    setCtaText(initialDraft?.ctaText ?? (useOriginalPostReadOnly ? '' : analysis.videoScript.ctaText || analysis.ctas[0] || ''));
+    setVariants(initialDraft?.variants ?? []);
     setDeletedReply(null);
-    setBackgroundMusicEnabled(true);
+    setBackgroundMusicEnabled(initialDraft?.backgroundMusicEnabled ?? true);
     setClipboardMessage(null);
     setImportBackup(null);
+    setNormalizingSpeech(false);
+    setSpeechTextsFinalized(initialDraft?.speechTextsFinalized ?? false);
+    if (!initialDraft && initialSpeechSegments?.length) applySpeechSegments(initialSpeechSegments, nextReplies, false);
   // Reset the draft only when the user opens a different post or changes the
   // creative mode. Depending on the full post/analysis objects resets typed
   // TTS edits whenever a parent render recreates those objects.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id, useOriginalPostReadOnly]);
   useEffect(() => {
-    setBackgroundPath(initialBackgroundPath ?? pickRandomBackgroundAsset(assets));
-    setProductClipPath(matchedDemoPath);
+    setBackgroundPath(initialDraft?.backgroundPath ?? initialBackgroundPath ?? pickRandomBackgroundAsset(assets));
+    setProductClipPath(initialDraft?.productClipPath ?? matchedDemoPath);
   // A resource choice belongs to one draft. Reset it when opening another post,
   // but do not overwrite a manual selection during ordinary parent re-renders.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id]);
   useEffect(() => () => stopDragAutoScroll(), []);
-  const renderRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, postTtsText, replyTtsTexts: replies.map((reply) => replyTtsTexts[replyKey(reply)] || reply.content), speechTextsFinalized: true, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, backgroundMusicEnabled, productClipPath, variants: variants.length ? variants : undefined };
+  const renderRequest: VideoDraftRequest = { post, analysis, selectedReplies: replies, hookText, postReadVersion: postText, postTtsText, replyTtsTexts: replies.map((reply) => replyTtsTexts[replyKey(reply)] || reply.content), speechTextsFinalized, transitionLine, solutionText, ctaText, backgroundPath: backgroundPath || undefined, backgroundMusicEnabled, productClipPath, variants: variants.length ? variants : undefined };
+  const currentDraftReviewed = Boolean(contentReviewed && initialDraft && draftsEqual(initialDraft, renderRequest));
   const estimatedDuration = estimateVideoDuration([
     hookText,
     postTtsText,
@@ -134,7 +153,63 @@ export function TikTokBriefModal({
       replyKey(reply),
       sections[index + 1] ?? current[replyKey(reply)] ?? reply.content
     ])));
+    setSpeechTextsFinalized(true);
     return true;
+  }
+
+  function applySpeechSegments(
+    segments: SpeechNormalizationSegment[],
+    targetReplies = replies,
+    saveBackup = true
+  ) {
+    const expectedIds = ['post', ...targetReplies.map((_, index) => 'reply-' + (index + 1))];
+    if (segments.length !== expectedIds.length || segments.some((segment, index) => segment.id !== expectedIds[index] || !segment.text.trim())) {
+      return false;
+    }
+    if (saveBackup) setImportBackup({ postText: postTtsText, replyTexts: { ...replyTtsTexts } });
+    setPostTtsText(segments[0].text);
+    setReplyTtsTexts(Object.fromEntries(targetReplies.map((reply, index) => [
+      replyKey(reply),
+      segments[index + 1].text
+    ])));
+    setSpeechTextsFinalized(true);
+    return true;
+  }
+
+  async function normalizeWithAi() {
+    const api = window.desktopAPI;
+    if (!api || normalizingSpeech) return;
+    setNormalizingSpeech(true);
+    setClipboardMessage(null);
+    try {
+      const result = await api.normalizeSpeech({
+        relatedPostId: post.id,
+        segments: [
+          { id: 'post', text: postTtsText },
+          ...replies.map((reply, index) => ({
+            id: 'reply-' + (index + 1),
+            text: replyTtsTexts[replyKey(reply)] || reply.content
+          }))
+        ]
+      });
+      if (!applySpeechSegments(result.segments)) {
+        throw new Error('Kết quả chuẩn hóa không khớp các phân đoạn hiện tại.');
+      }
+      onSpeechNormalized?.(result);
+      setClipboardMessage({
+        tone: 'success',
+        text: result.cached
+          ? 'Đã nạp bản chuẩn hóa từ cache cho ' + result.segments.length + ' phân đoạn.'
+          : 'Đã tự động chuẩn hóa ' + result.segments.length + ' phân đoạn bằng ' + result.model + '.'
+      });
+    } catch (normalizationError) {
+      setClipboardMessage({
+        tone: 'error',
+        text: normalizationError instanceof Error ? normalizationError.message : String(normalizationError)
+      });
+    } finally {
+      setNormalizingSpeech(false);
+    }
   }
 
   async function copyForChatGpt() {
@@ -165,6 +240,7 @@ export function TikTokBriefModal({
     if (!importBackup) return;
     setPostTtsText(importBackup.postText);
     setReplyTtsTexts(importBackup.replyTexts);
+    setSpeechTextsFinalized(true);
     setImportBackup(null);
     setClipboardMessage({ tone: 'success', text: 'Đã hoàn tác lần dán transcript gần nhất.' });
   }
@@ -258,7 +334,7 @@ export function TikTokBriefModal({
       >
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-[#0c0f13]/95 px-5 py-4 backdrop-blur">
           <div>
-            <div className="text-xs font-medium uppercase tracking-[0.16em] text-accent">TikTok / Reels</div>
+            <div className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Video từ Threads</div>
             <h2 className="mt-1 text-lg font-semibold text-text">{copy.tiktokBrief}</h2>
             <div className="mt-2 flex flex-wrap gap-2">
               {useOriginalPostReadOnly ? <Badge>Original</Badge> : (
@@ -270,7 +346,7 @@ export function TikTokBriefModal({
               )}
             </div>
           </div>
-          <Button aria-label={copy.close} title={copy.close} className="px-2" icon={<X className="size-4" />} onClick={onClose} />
+          <Button aria-label={copy.close} title={copy.close} className="px-2" icon={<X className="size-4" />} onClick={() => onClose(renderRequest)} />
         </header>
 
         <div className="space-y-4 p-5">
@@ -350,17 +426,29 @@ export function TikTokBriefModal({
             </div>
             {!useOriginalPostReadOnly ? <label className="grid gap-2 text-xs text-muted">{copy.hookOpening}<textarea className="min-h-20 rounded-md border border-border bg-background p-3 text-sm text-text" value={hookText} onChange={(event) => setHookText(event.target.value)} /></label> : null}
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs text-muted">Chỉnh toàn bộ lời đọc trong một editor. Tool sẽ đọc đúng nội dung đã duyệt và không tự gọi AI.</div>
+              <div className="text-xs text-muted">Chuẩn hóa một lần, duyệt lại nội dung rồi render bằng VieNeu Local.</div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button icon={<ClipboardCopy className="size-4" />} onClick={() => void copyForChatGpt()}>Copy cho ChatGPT</Button>
-              <Button icon={<ClipboardPaste className="size-4" />} onClick={() => void pasteFromChatGpt()}>Dán kết quả</Button>
-              <span className="text-xs text-muted">Copy → sửa trong ChatGPT → copy câu trả lời → dán kết quả</span>
+              <Button
+                variant="primary"
+                icon={normalizingSpeech ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                disabled={normalizingSpeech}
+                onClick={() => void normalizeWithAi()}
+              >
+                {normalizingSpeech ? 'Đang chuẩn hóa...' : 'Chuẩn hóa tự động'}
+              </Button>
+              <details className="text-xs text-muted">
+                <summary className="cursor-pointer select-none hover:text-text">Thao tác thủ công</summary>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button icon={<ClipboardCopy className="size-4" />} onClick={() => void copyForChatGpt()}>Copy cho ChatGPT</Button>
+                  <Button icon={<ClipboardPaste className="size-4" />} onClick={() => void pasteFromChatGpt()}>Dán kết quả</Button>
+                </div>
+              </details>
             </div>
             {clipboardMessage ? (
               <div className={`mt-2 flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs ${clipboardMessage.tone === 'success' ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-100' : 'border-rose-400/20 bg-rose-400/5 text-rose-100'}`}>
                 <span>{clipboardMessage.text}</span>
-                {importBackup ? <button className="shrink-0 font-semibold text-sky-300 hover:text-sky-200" onClick={undoTranscriptImport}>Hoàn tác lần dán</button> : null}
+                {importBackup ? <button className="shrink-0 font-semibold text-sky-300 hover:text-sky-200" onClick={undoTranscriptImport}>Hoàn tác</button> : null}
               </div>
             ) : null}
             <div
@@ -375,13 +463,13 @@ export function TikTokBriefModal({
               <section className="group px-4 py-3">
                 <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-300">Bài viết</div>
-                  {postTtsText.trim() !== postText.trim() ? <Button className="h-8 px-2 text-xs opacity-70 transition group-hover:opacity-100" onClick={() => setPostTtsText(postText)}>Khôi phục</Button> : null}
+                  {postTtsText.trim() !== postText.trim() ? <Button className="h-8 px-2 text-xs opacity-70 transition group-hover:opacity-100" onClick={() => { setPostTtsText(postText); setSpeechTextsFinalized(true); }}>Khôi phục</Button> : null}
                 </div>
                 <EditableText
                   ariaLabel="Nội dung đọc của bài viết"
                   className="min-h-20 whitespace-pre-wrap text-sm leading-6 text-text outline-none"
                   value={postTtsText}
-                  onChange={setPostTtsText}
+                  onChange={(value) => { setPostTtsText(value); setSpeechTextsFinalized(true); }}
                 />
               </section>
               {replies.map((reply, index) => (
@@ -404,7 +492,7 @@ export function TikTokBriefModal({
                       Reply {index + 1} <span className="normal-case tracking-normal">· {(reply.likes ?? 0).toLocaleString('vi-VN')} likes{reply.author ? ` · ${reply.author}` : ''}</span>
                     </div>
                     <div className="flex shrink-0 items-center gap-1 opacity-60 transition group-hover:opacity-100 group-focus-within:opacity-100">
-                      {(replyTtsTexts[replyKey(reply)] || reply.content).trim() !== reply.content.trim() ? <button className="px-1 text-[11px] text-sky-300 hover:text-sky-200" onClick={() => setReplyTtsTexts((current) => ({ ...current, [replyKey(reply)]: reply.content }))}>Khôi phục</button> : null}
+                      {(replyTtsTexts[replyKey(reply)] || reply.content).trim() !== reply.content.trim() ? <button className="px-1 text-[11px] text-sky-300 hover:text-sky-200" onClick={() => { setReplyTtsTexts((current) => ({ ...current, [replyKey(reply)]: reply.content })); setSpeechTextsFinalized(true); }}>Khôi phục</button> : null}
                       <div
                         role="button"
                         tabIndex={0}
@@ -433,7 +521,7 @@ export function TikTokBriefModal({
                     ariaLabel={`Nội dung đọc của reply ${index + 1}`}
                     className="min-h-12 whitespace-pre-wrap text-sm leading-6 text-text outline-none"
                     value={replyTtsTexts[replyKey(reply)] ?? reply.content}
-                    onChange={(nextText) => setReplyTtsTexts((current) => ({ ...current, [replyKey(reply)]: nextText }))}
+                    onChange={(nextText) => { setReplyTtsTexts((current) => ({ ...current, [replyKey(reply)]: nextText })); setSpeechTextsFinalized(true); }}
                   />
                 </section>
               ))}
@@ -550,7 +638,16 @@ export function TikTokBriefModal({
             ) : null}
           </div>
           <div className="flex flex-wrap justify-end gap-2">
-            <Button onClick={onClose}>{copy.close}</Button>
+            <Button onClick={() => onClose(renderRequest)}>{copy.close}</Button>
+            {onReviewDraft && !renderedVideoPath ? (
+              <Button
+                className={currentDraftReviewed ? 'border-emerald-500/30 text-emerald-200' : 'bg-emerald-400 text-emerald-950 hover:bg-emerald-300'}
+                icon={<CheckCircle2 className="size-4" />}
+                onClick={() => onReviewDraft(renderRequest)}
+              >
+                {currentDraftReviewed ? 'Đã duyệt nội dung' : 'Duyệt nội dung'}
+              </Button>
+            ) : null}
             <Button variant="primary" icon={<Video className="size-4" />} disabled={renderingVideo} onClick={() => onRenderVideo(renderRequest)}>
               {renderingVideo ? copy.renderingVideoDraft : copy.createVideoDraft}
             </Button>
@@ -647,8 +744,15 @@ function replyKey(reply: { id?: string; author?: string; content: string }) {
   return reply.id || `${reply.author ?? ''}:${reply.content}`;
 }
 
-function buildReplyTtsTexts(replies: Array<{ id?: string; author?: string; content: string }>) {
-  return Object.fromEntries(replies.map((reply) => [replyKey(reply), reply.content]));
+function buildReplyTtsTexts(
+  replies: Array<{ id?: string; author?: string; content: string }>,
+  savedTexts?: string[]
+) {
+  return Object.fromEntries(replies.map((reply, index) => [replyKey(reply), savedTexts?.[index] ?? reply.content]));
+}
+
+function draftsEqual(left: VideoDraftRequest, right: VideoDraftRequest) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 const SPEECH_SECTION_PATTERN = /^\[\[(?:BÀI VIẾT|REPLY \d+)\]\]$/gm;

@@ -136,6 +136,18 @@ CREATE TABLE IF NOT EXISTS api_usage_log (
 
 CREATE INDEX IF NOT EXISTS idx_api_usage_created ON api_usage_log(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS speech_normalization_cache (
+  cache_key TEXT PRIMARY KEY,
+  prompt_version TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  output_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_speech_normalization_created
+  ON speech_normalization_cache(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

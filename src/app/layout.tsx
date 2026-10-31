@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-  title: 'Threads Trend Finder',
-  description: 'Desktop affiliate research workflow for Threads trends.'
+  title: 'Threads Video Studio',
+  description: 'Create videos from Threads posts and replies.'
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

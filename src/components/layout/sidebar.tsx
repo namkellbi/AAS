@@ -1,14 +1,12 @@
 'use client';
 
-import { Bookmark, Boxes, CircleCheckBig, Flame, KeyRound, LineChart, Radar, Settings, ShoppingBag, Sparkles, Video } from 'lucide-react';
+import { Bookmark, Boxes, Flame, KeyRound, Radar, Settings, ShoppingBag, Sparkles, Video } from 'lucide-react';
 import type { TranslationCopy } from '@/lib/i18n';
 import type { FeatureVisibility } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const dailyNav = [
-  { id: 'home', label: 'Create video', icon: Video },
-  { id: 'reviews', label: 'Review videos', icon: CircleCheckBig },
-  { id: 'uploads', labelKey: 'results', icon: LineChart }
+  { id: 'home', label: 'Create video', icon: Video }
 ] as const;
 
 const advancedNav = [
@@ -25,7 +23,9 @@ type NavItem = (typeof dailyNav)[number] | (typeof advancedNav)[number] | { id: 
 export function Sidebar({ active, features, language, onChange, copy }: { active: string; features: FeatureVisibility; language: 'en' | 'vi'; onChange: (id: string) => void; copy: TranslationCopy }) {
   const visibleDailyNav = dailyNav;
   const visibleAdvancedNav = advancedNav.filter((item) => {
-    if (item.id === 'products') return features.affiliateWorkspace;
+    // Preserve the legacy workspace in code and local data, but keep it out of
+    // the focused Threads-to-video interface.
+    if (item.id === 'products') return false;
     if (item.id === 'assets') return true;
     return features.opportunityDiscovery;
   });
@@ -33,11 +33,7 @@ export function Sidebar({ active, features, language, onChange, copy }: { active
     const Icon = item.icon;
     const label = item.id === 'home'
       ? (language === 'vi' ? 'Tạo video' : 'Create video')
-      : item.id === 'reviews'
-        ? (language === 'vi' ? 'Duyệt video' : 'Review videos')
-        : item.id === 'uploads'
-          ? (language === 'vi' ? 'Hiệu suất' : 'Performance')
-        : 'label' in item ? item.label : copy[item.labelKey];
+      : 'label' in item ? item.label : copy[item.labelKey];
     return (
       <button
         key={item.id}
